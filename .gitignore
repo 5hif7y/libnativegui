@@ -1,0 +1,15 @@
+# Object files and compiled libraries
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.suo
+*.user
+*.ncb
+*.sdf
+*.opensdf
+*.db
+*~
+#*#
+.#*

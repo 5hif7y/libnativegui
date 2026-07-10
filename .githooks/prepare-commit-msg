@@ -1,0 +1,24 @@
+#!/bin/sh
+
+# Git prepare-commit-msg hook for JIRA issue key automation
+
+# Get current branch name
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Extract JIRA-style key (e.g., FTIR-123 or ABC-999) from the start of the branch name
+JIRA_KEY=$(echo "$BRANCH_NAME" | grep -oE '^[A-Za-z]+-[0-9]+' | tr '[:lower:]' '[:upper:]')
+
+if [ -n "$JIRA_KEY" ]; then
+    COMMIT_MSG_FILE=$1
+    FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+    
+    # Check if the commit message already starts with the JIRA key (case insensitive check)
+    if ! echo "$FIRST_LINE" | tr '[:lower:]' '[:upper:]' | grep -qE "^$JIRA_KEY"; then
+        # Create temp file to prepend the key
+        TEMP_MSG=$(mktemp)
+        echo "$JIRA_KEY: $FIRST_LINE" > "$TEMP_MSG"
+        tail -n +2 "$COMMIT_MSG_FILE" >> "$TEMP_MSG"
+        mv "$TEMP_MSG" "$COMMIT_MSG_FILE"
+        echo "[Git Hook] Prepended JIRA key '$JIRA_KEY' to commit message."
+    fi
+fi
