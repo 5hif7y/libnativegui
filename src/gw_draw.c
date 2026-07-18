@@ -1,6 +1,7 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 #include "gw_internal.h"
+#include "antialiasing.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -538,56 +539,19 @@ void GW_DrawImage(GW_Window* win, GW_Image* img, int dx, int dy, int dw, int dh,
             float src_x = sx + su * (sw - 1);
             float src_y = sy + sv * (sh - 1);
             
-            // Bilinear filtering
-            int x0 = (int)floorf(src_x);
-            int y0 = (int)floorf(src_y);
-            int x1 = x0 + 1;
-            int y1 = y0 + 1;
+            float scale_x = (float)sw / (float)dw;
+            float scale_y = (float)sh / (float)dh;
             
-            float tx = src_x - x0;
-            float ty = src_y - y0;
-            
-            if (x0 < 0) x0 = 0; if (x0 >= img->w) x0 = img->w - 1;
-            if (x1 < 0) x1 = 0; if (x1 >= img->w) x1 = img->w - 1;
-            if (y0 < 0) y0 = 0; if (y0 >= img->h) y0 = img->h - 1;
-            if (y1 < 0) y1 = 0; if (y1 >= img->h) y1 = img->h - 1;
-            
-            uint32_t c00 = img_pixels[y0 * img->w + x0];
-            uint32_t c10 = img_pixels[y0 * img->w + x1];
-            uint32_t c01 = img_pixels[y1 * img->w + x0];
-            uint32_t c11 = img_pixels[y1 * img->w + x1];
-            
-            // Extract channels
-            float a00 = (c00 >> 24) & 0xFF;
-            float r00 = (c00 >> 16) & 0xFF;
-            float g00 = (c00 >> 8) & 0xFF;
-            float b00 = c00 & 0xFF;
-            
-            float a10 = (c10 >> 24) & 0xFF;
-            float r10 = (c10 >> 16) & 0xFF;
-            float g10 = (c10 >> 8) & 0xFF;
-            float b10 = c10 & 0xFF;
-            
-            float a01 = (c01 >> 24) & 0xFF;
-            float r01 = (c01 >> 16) & 0xFF;
-            float g01 = (c01 >> 8) & 0xFF;
-            float b01 = c01 & 0xFF;
-            
-            float a11 = (c11 >> 24) & 0xFF;
-            float r11 = (c11 >> 16) & 0xFF;
-            float g11 = (c11 >> 8) & 0xFF;
-            float b11 = c11 & 0xFF;
-            
-            // Interpolate channels
-            float w00 = (1.0f - tx) * (1.0f - ty);
-            float w10 = tx * (1.0f - ty);
-            float w01 = (1.0f - tx) * ty;
-            float w11 = tx * ty;
-            
-            uint8_t a = (uint8_t)(a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11);
-            uint8_t r = (uint8_t)(r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11);
-            uint8_t g = (uint8_t)(g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11);
-            uint8_t b = (uint8_t)(b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11);
+            AntiAliasColor color;
+            if (scale_x > 1.3f || scale_y > 1.3f) {
+                color = sample_ssaa_nearest_optimized(img_pixels, img->w, img->h, src_x, src_y, scale_x, scale_y);
+            } else {
+                color = sample_bilinear_original(img_pixels, img->w, img->h, src_x, src_y);
+            }
+            uint8_t a = color.a;
+            uint8_t r = color.r;
+            uint8_t g = color.g;
+            uint8_t b = color.b;
             
             int dest_idx = row_offset + x;
             if (a == 255) {

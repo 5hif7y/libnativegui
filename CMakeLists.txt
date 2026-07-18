@@ -5,6 +5,12 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Common library source files
+set(COMMON_SOURCES
+    src/antialiasing.c
+    src/gw_draw.c
+)
+
+# Wagner's library source files
 set(WAGNER_SOURCES
     src/analyse.c
     src/color.c
@@ -36,7 +42,6 @@ set(WAGNER_SOURCES
 if(WIN32)
     set(PLATFORM_SOURCES
         src/gw_win32.c
-        src/gw_draw.c
     )
     set(PLATFORM_LIBS
         user32
@@ -48,7 +53,6 @@ if(WIN32)
 else()
     set(PLATFORM_SOURCES
         src/gw_x11.c
-        src/gw_draw.c
     )
     find_package(X11 REQUIRED)
     set(PLATFORM_LIBS
@@ -59,7 +63,7 @@ else()
 endif()
 
 # Define the static library target
-add_library(nativegui STATIC ${WAGNER_SOURCES} ${PLATFORM_SOURCES})
+add_library(nativegui STATIC ${COMMON_SOURCES} ${WAGNER_SOURCES} ${PLATFORM_SOURCES})
 
 # Include directories
 target_include_directories(nativegui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
