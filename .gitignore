@@ -1,7 +1,23 @@
-# Object files and compiled libraries
-*.obj
+# Build folders
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+cmake-build-*/
+.vs/
+out/
+
+# Compiled binaries
 *.lib
 *.exe
+*.a
+*.so
+*.dylib
+
+# Object files and compilation residues
+*.obj
 *.pdb
 *.ilk
 *.suo
@@ -10,6 +26,12 @@
 *.sdf
 *.opensdf
 *.db
-*~
-#*#
-.#*
+*.o
+
+# Latex to PDF compilation residues
+*.aux
+*.log 
+*.out
+*.toc
+
+

@@ -6,37 +6,37 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Common library source files
 set(WAGNER_SOURCES
-    analyse.c
-    color.c
-    contour.c
-    cobject3d.c
-    draw2dgraph.c
-    draw3dcontour.c
-    draw3dgraph.c
-    fftn.c
-    freedraw.c
-    graph.c
-    koord.c
-    koord2d.c
-    koord3d.c
-    menu.c
-    mydraw.c
-    mydraw_2d.c
-    mygraph.c
-    myrand.c
-    neuzeichnen.c
-    objects3d.c
-    tfield.c
-    ufield.c
-    vector.c
-    view3d.c
+    src/analyse.c
+    src/color.c
+    src/contour.c
+    src/cobject3d.c
+    src/draw2dgraph.c
+    src/draw3dcontour.c
+    src/draw3dgraph.c
+    src/fftn.c
+    src/freedraw.c
+    src/graph.c
+    src/koord.c
+    src/koord2d.c
+    src/koord3d.c
+    src/menu.c
+    src/mydraw.c
+    src/mydraw_2d.c
+    src/mygraph.c
+    src/myrand.c
+    src/neuzeichnen.c
+    src/objects3d.c
+    src/tfield.c
+    src/ufield.c
+    src/vector.c
+    src/view3d.c
 )
 
 # Platform-dependent source files and libraries
 if(WIN32)
     set(PLATFORM_SOURCES
-        gw_win32.c
-        gw_draw.c
+        src/gw_win32.c
+        src/gw_draw.c
     )
     set(PLATFORM_LIBS
         user32
@@ -47,8 +47,8 @@ if(WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES _WIN32)
 else()
     set(PLATFORM_SOURCES
-        gw_x11.c
-        gw_draw.c
+        src/gw_x11.c
+        src/gw_draw.c
     )
     find_package(X11 REQUIRED)
     set(PLATFORM_LIBS
@@ -62,7 +62,7 @@ endif()
 add_library(nativegui STATIC ${WAGNER_SOURCES} ${PLATFORM_SOURCES})
 
 # Include directories
-target_include_directories(nativegui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(nativegui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Link libraries
 target_link_libraries(nativegui PUBLIC ${PLATFORM_LIBS})
