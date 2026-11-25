@@ -1,4 +1,14 @@
 cmake_minimum_required(VERSION 3.12)
+# MSVC: NATIVEGUI_STATIC_CRT=ON builds against the static C runtime (/MT),
+# which is what Odin (and other static-CRT callers) link; default is CMake's
+# dynamic /MD. Needs CMake >= 3.15 (policy CMP0091).
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+option(NATIVEGUI_STATIC_CRT "MSVC: link the static C runtime (/MT)" OFF)
+if(NATIVEGUI_STATIC_CRT)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 project(libnativegui C)
 
 set(CMAKE_C_STANDARD 99)
