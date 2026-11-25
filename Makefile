@@ -1,12 +1,17 @@
 # MSVC NMake Makefile for LibGW-Graph consolidated library
+# Sources in src\, headers in include\; objects and the library go to the
+# repo root (as before).
 
 CC = cl
-CFLAGS = /nologo /O2 /I. /D_CRT_SECURE_NO_WARNINGS /D_USE_MATH_DEFINES /D_WIN32 /EHsc
+CFLAGS = /nologo /O2 /Iinclude /D_CRT_SECURE_NO_WARNINGS /D_USE_MATH_DEFINES /D_WIN32 /EHsc
 LIB_TOOL = lib
 
 OBJS = \
     gw_win32.obj \
+    gw_win32_ext.obj \
     gw_draw.obj \
+    gw_shapes.obj \
+    antialiasing.obj \
     analyse.obj \
     color.obj \
     contour.obj \
@@ -37,7 +42,7 @@ all: libnativegui.lib
 libnativegui.lib: $(OBJS)
     $(LIB_TOOL) /nologo /out:libnativegui.lib $(OBJS)
 
-.c.obj:
+{src}.c.obj:
     $(CC) $(CFLAGS) /c $<
 
 clean:
