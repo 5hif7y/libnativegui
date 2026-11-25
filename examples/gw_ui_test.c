@@ -182,6 +182,29 @@ int main(void) {
     wheel(ui, &a, 380, 100, -120); // wheel outside the list
     CHECK(GWUI_GetScroll(ui, "list") == 0, "wheel outside does not scroll");
 
+    // Word wrapping.
+    {
+        int a_, d_, lh;
+        GW_GetFontMetrics(font, &a_, &d_, &lh);
+        const char* para = "The quick brown fox jumps over the lazy dog and keeps running far away";
+        int one = GWUI_MeasureWrapped(ui, para, NULL, 2000);
+        CHECK(one == lh, "fits in one line at 2000 px: %d (line %d)", one, lh);
+        int narrow = GWUI_MeasureWrapped(ui, para, NULL, 120);
+        CHECK(narrow >= 4 * lh, "wraps to several lines at 120 px: %d", narrow / lh);
+        CHECK(GWUI_MeasureWrapped(ui, "a\nb\n\nc", NULL, 2000) == 4 * lh, "newlines break lines (empty line kept)");
+        CHECK(GWUI_MeasureWrapped(ui, "", NULL, 100) == 0, "empty text takes no height");
+        int long_word = GWUI_MeasureWrapped(ui, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", NULL, 60);
+        CHECK(long_word >= 3 * lh, "a word wider than the width is cut: %d lines", long_word / lh);
+        CHECK(GWUI_MeasureWrapped(ui, "x", NULL, 1) == lh, "a char wider than the width still advances");
+        // Paragraph takes its height in the layout.
+        GWUI_Begin(ui);
+        GWUI_Rect before = GWUI_NextRect(ui);
+        int ph = GWUI_Paragraph(ui, para, NULL, 0xFFFFFFFF);
+        GWUI_Rect after = GWUI_NextRect(ui);
+        GWUI_End(ui);
+        CHECK(ph > 0 && after.y >= before.y + before.h + ph, "paragraph moves the layout down: %d -> %d (h %d)", before.y, after.y, ph);
+    }
+
     GWUI_Destroy(ui);
     GW_FreeFont(font);
     GW_DestroyWindow(win);

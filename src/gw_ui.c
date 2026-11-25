@@ -604,6 +604,101 @@ void GWUI_LabelEx(GWUI* ui, const char* text, GW_Font* font, uint32_t color, int
     GWUI_DrawText(ui, GWUI_NextRect(ui), text, font, color, align);
 }
 
+/* Word wrapping: walks text one line at a time. A line is the longest run
+ * that fits width, broken after the last space in it (the space is not
+ * drawn), at "\n", or by characters when a single word is wider than width. */
+typedef void (*wrap_line_fn)(void* user, const char* s, int len, int line);
+
+static int wrap_text(GW_Font* f, const char* text, int width, wrap_line_fn fn, void* user) {
+    char ch_buf[8];
+    int lines = 0;
+    const char* p = text;
+    if (width < 1) width = 1;
+    while (*p) {
+        // Width is summed per character (advance widths, no kerning): linear
+        // per line, so long texts stay cheap to wrap every frame.
+        int n = 0, last_space = -1, fit = 0, w = 0;
+        for (;;) {
+            unsigned char ch = (unsigned char)p[n];
+            if (ch == 0 || ch == '\n') { fit = n; break; }
+            int next = n + 1;
+            while (p[next] && ((unsigned char)p[next] & 0xC0) == 0x80 && next - n < 4) next++; // whole UTF-8 char
+            memcpy(ch_buf, p + n, (size_t)(next - n));
+            ch_buf[next - n] = 0;
+            w += text_w(f, ch_buf);
+            if (n >= 1000) { fit = n; break; } // draw buffer limit
+            if (w > width && n > 0) {
+                fit = last_space > 0 ? last_space : n;
+                break;
+            }
+            if (ch == ' ') last_space = n;
+            n = next;
+        }
+        if (fn) fn(user, p, fit, lines);
+        lines++;
+        p += fit;
+        if (*p == '\n') p++;
+        else while (*p == ' ') p++; // the break swallows the spaces
+    }
+    return lines;
+}
+
+static int line_height(GW_Font* f) {
+    int a, d, lh;
+    GW_GetFontMetrics(f, &a, &d, &lh);
+    return lh;
+}
+
+int GWUI_MeasureWrapped(GWUI* ui, const char* text, GW_Font* font, int width) {
+    if (!font) font = ui->font;
+    if (!text || !*text) return 0;
+    return wrap_text(font, text, width, NULL, NULL) * line_height(font);
+}
+
+typedef struct {
+    GWUI* ui;
+    GW_Font* font;
+    uint32_t color;
+    int x, y, lh;
+    int clip_y0, clip_y1;
+} WrapDraw;
+
+static void wrap_draw_line(void* user, const char* s, int len, int line) {
+    WrapDraw* w = (WrapDraw*)user;
+    int y = w->y + line * w->lh;
+    if (y + w->lh < w->clip_y0 || y > w->clip_y1) return; // off screen
+    char buf[1024];
+    if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
+    memcpy(buf, s, (size_t)len);
+    buf[len] = 0;
+    GW_DrawTextUTF8(w->ui->win, w->font, w->x, y, buf, w->color);
+}
+
+void GWUI_DrawTextWrapped(GWUI* ui, GWUI_Rect r, const char* text, GW_Font* font, uint32_t color) {
+    if (!font) font = ui->font;
+    if (!text || !*text) return;
+    int saved[4];
+    current_clip(ui, saved);
+    GWUI_Rect clip = rect_intersect(rect_make(saved[0], saved[1], saved[2], saved[3]), r);
+    if (clip.w <= 0 || clip.h <= 0) return;
+    GW_SetClipRect(ui->win, clip.x, clip.y, clip.w, clip.h);
+    WrapDraw w = {ui, font, color, r.x, r.y, line_height(font), clip.y, clip.y + clip.h};
+    wrap_text(font, text, r.w, wrap_draw_line, &w);
+    GW_SetClipRect(ui->win, saved[0], saved[1], saved[2], saved[3]);
+}
+
+int GWUI_Paragraph(GWUI* ui, const char* text, GW_Font* font, uint32_t color) {
+    Container* c = top(ui);
+    end_row(c, ui->t.spacing);
+    int h = GWUI_MeasureWrapped(ui, text, font, c->body.w);
+    if (h <= 0) return 0;
+    GWUI_Rect r = rect_make(c->body.x, c->cur_y, c->body.w, h);
+    GWUI_DrawTextWrapped(ui, r, text, font, color);
+    c->cur_y += h + ui->t.spacing;
+    c->max_y = imax(c->max_y, c->cur_y);
+    return h;
+}
+
 void GWUI_Label(GWUI* ui, const char* text) { GWUI_LabelEx(ui, text, NULL, ui->t.text, GWUI_ALIGN_LEFT); }
 void GWUI_LabelDim(GWUI* ui, const char* text) { GWUI_LabelEx(ui, text, NULL, ui->t.text_dim, GWUI_ALIGN_LEFT); }
 

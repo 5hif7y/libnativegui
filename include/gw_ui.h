@@ -117,6 +117,14 @@ void GWUI_LabelEx(GWUI* ui, const char* text, GW_Font* font, uint32_t color, int
 // Draws text in r (vertically centered, clipped to r). font NULL = regular.
 void GWUI_DrawText(GWUI* ui, GWUI_Rect r, const char* text, GW_Font* font, uint32_t color, int align);
 int  GWUI_TextWidth(GWUI* ui, const char* text, GW_Font* font);
+// Word-wrapped text: lines break at spaces (and at "\n"); a word wider than
+// the width is cut by characters. MeasureWrapped returns the height the text
+// takes at that width; DrawTextWrapped draws it from the top of r (clipped to
+// r); Paragraph is a full-width wrapped block in the current container (it
+// ends the current row and takes as much height as the text needs).
+int  GWUI_MeasureWrapped(GWUI* ui, const char* text, GW_Font* font, int width);
+void GWUI_DrawTextWrapped(GWUI* ui, GWUI_Rect r, const char* text, GW_Font* font, uint32_t color);
+int  GWUI_Paragraph(GWUI* ui, const char* text, GW_Font* font, uint32_t color);
 
 // Widgets. They return 1 when used this frame.
 #define GWUI_BUTTON_NORMAL  0
