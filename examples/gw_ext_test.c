@@ -151,6 +151,26 @@ int main(int argc, char** argv) {
     GW_DrawLineAA(w, 10.5f, 10.5f, 90.5f, 10.5f, 2.0f, 0xFFFFFFFF);
     CHECK(px(w, 50, 10) == 0xFFFFFF && px(w, 50, 14) == 0, "AA line: %06x %06x", px(w, 50, 10), px(w, 50, 14));
 
+    /* polygons: even-odd, anti-aliased edges, clip */
+    GW_Clear(w, 0x000000);
+    const float tri[] = { 10, 10, 90, 10, 10, 90 };
+    GW_FillPolygon(w, tri, 3, 0xFF00FF00);
+    CHECK(px(w, 20, 20) == 0x00FF00, "polygon inside: %06x", px(w, 20, 20));
+    CHECK(px(w, 80, 80) == 0, "polygon outside: %06x", px(w, 80, 80));
+    uint32_t diag = px(w, 50, 49); // on the hypotenuse
+    CHECK(diag != 0 && diag != 0x00FF00, "polygon edge is anti-aliased: %06x", diag);
+    GW_Clear(w, 0x000000);
+    // A square with a square hole drawn as one path (outer then inner ring
+    // joined): even-odd leaves the hole empty.
+    const float ring[] = { 10, 10, 70, 10, 70, 70, 10, 70, 10, 10, 30, 30, 30, 50, 50, 50, 50, 30, 30, 30 };
+    GW_FillPolygon(w, ring, 10, 0xFFFFFFFF);
+    CHECK(px(w, 15, 40) == 0xFFFFFF && px(w, 40, 40) == 0, "even-odd hole: %06x %06x", px(w, 15, 40), px(w, 40, 40));
+    GW_Clear(w, 0x000000);
+    GW_SetClipRect(w, 0, 0, 30, 120);
+    GW_FillPolygon(w, tri, 3, 0xFFFF0000);
+    CHECK(px(w, 20, 20) == 0xFF0000 && px(w, 40, 20) == 0, "polygon respects the clip: %06x %06x", px(w, 20, 20), px(w, 40, 20));
+    GW_ResetClipRect(w);
+
     /* images */
     const char svg[] = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect x='0' y='0' width='10' height='10' fill='#ff0000'/></svg>";
     GW_Image* si = GW_LoadSVGFromMemory(svg, (int)strlen(svg), 20, 20);

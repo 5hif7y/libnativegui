@@ -233,6 +233,8 @@ void GW_FillRoundRect(GW_Window* win, int x, int y, int w, int h, int radius, ui
 void GW_DrawRoundRect(GW_Window* win, int x, int y, int w, int h, int radius, int thickness, uint32_t color);
 void GW_FillCircle(GW_Window* win, int cx, int cy, int radius, uint32_t color);
 void GW_DrawLineAA(GW_Window* win, float x1, float y1, float x2, float y2, float thickness, uint32_t color);
+// Even-odd, anti-aliased polygon fill; xy = n points as x0, y0, x1, y1, ...
+void GW_FillPolygon(GW_Window* win, const float* xy, int n, uint32_t color);
 // Draws an image tinted: every pixel's RGB is replaced by tint's RGB and
 // its alpha multiplied by tint's alpha (monochrome icons in any color).
 void GW_DrawImageTinted(GW_Window* win, GW_Image* img, int dx, int dy, int dw, int dh, uint32_t tint);
@@ -273,7 +275,8 @@ void GW_RequestRedraw(GW_Window* win);
 uint64_t GW_GetTicks(void);
 
 // System tray / notification-area icon owned by win. Clicks arrive as
-// GW_EVENT_TRAY with this id. Returns NULL where unsupported (X11 for now).
+// GW_EVENT_TRAY with this id. Returns NULL where unsupported (X11: when no
+// XEmbed system tray manager is running).
 typedef struct GW_TrayIcon GW_TrayIcon;
 GW_TrayIcon* GW_CreateTrayIcon(GW_Window* owner, int id, GW_Image* icon, const char* tooltip_utf8);
 void GW_SetTrayIcon(GW_TrayIcon* tray, GW_Image* icon);

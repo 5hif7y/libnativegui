@@ -166,3 +166,67 @@ void GW_DrawLineAA(GW_Window* win, float x1f, float y1f, float x2f, float y2f, f
         }
     }
 }
+
+// Even-odd fill of a polygon given as n points (xy = x0, y0, x1, y1, ...;
+// closed implicitly), anti-aliased: 4 sub-scanlines per row and fractional
+// span ends give each pixel its covered fraction. Honours the clip rect.
+void GW_FillPolygon(GW_Window* win, const float* xy, int n, uint32_t color) {
+    if (!win || !win->backbuffer || !xy || n < 3 || ((color >> 24) & 0xFF) == 0) return;
+    int bx1, by1, bx2, by2;
+    if (!gw_draw_bounds(win, &bx1, &by1, &bx2, &by2)) return;
+    float miny = xy[1], maxy = xy[1];
+    for (int i = 1; i < n; i++) {
+        if (xy[2 * i + 1] < miny) miny = xy[2 * i + 1];
+        if (xy[2 * i + 1] > maxy) maxy = xy[2 * i + 1];
+    }
+    int y0 = (int)floorf(miny), y1 = (int)ceilf(maxy);
+    if (y0 < by1) y0 = by1;
+    if (y1 > by2) y1 = by2;
+    if (y0 >= y1) return;
+    int W = bx2 - bx1;
+    float* cov = (float*)malloc((size_t)(W + 1) * sizeof(float));
+    float* xs = (float*)malloc((size_t)n * sizeof(float));
+    if (!cov || !xs) { free(cov); free(xs); return; }
+    for (int y = y0; y < y1; y++) {
+        for (int i = 0; i <= W; i++) cov[i] = 0;
+        int any = 0;
+        for (int s = 0; s < 4; s++) {
+            float sy = (float)y + ((float)s + 0.5f) / 4.0f;
+            int k = 0;
+            for (int i = 0; i < n; i++) {
+                int j = (i + 1) % n;
+                float ax = xy[2 * i], ay = xy[2 * i + 1], bx = xy[2 * j], by = xy[2 * j + 1];
+                if ((ay <= sy && by > sy) || (by <= sy && ay > sy))
+                    xs[k++] = ax + (sy - ay) * (bx - ax) / (by - ay);
+            }
+            for (int i = 1; i < k; i++) { // insertion sort: few crossings per line
+                float v = xs[i];
+                int j = i - 1;
+                while (j >= 0 && xs[j] > v) { xs[j + 1] = xs[j]; j--; }
+                xs[j + 1] = v;
+            }
+            for (int p = 0; p + 1 < k; p += 2) {
+                float xa = xs[p], xb = xs[p + 1];
+                if (xa < (float)bx1) xa = (float)bx1;
+                if (xb > (float)bx2) xb = (float)bx2;
+                if (xa >= xb) continue;
+                any = 1;
+                int ia = (int)floorf(xa), ib = (int)floorf(xb);
+                if (ia == ib) { cov[ia - bx1] += 0.25f * (xb - xa); continue; }
+                cov[ia - bx1] += 0.25f * ((float)(ia + 1) - xa);
+                for (int q = ia + 1; q < ib; q++) cov[q - bx1] += 0.25f;
+                if (ib < bx2) cov[ib - bx1] += 0.25f * (xb - (float)ib);
+            }
+        }
+        if (!any) continue;
+        uint32_t* row = win->backbuffer + (size_t)y * win->width;
+        for (int x = bx1; x < bx2; x++) {
+            float c = cov[x - bx1];
+            if (c <= 0.002f) continue;
+            unsigned a = c >= 1.0f ? 255u : (unsigned)(c * 255.0f + 0.5f);
+            gw_blend_pixel(&row[x], color, a);
+        }
+    }
+    free(cov);
+    free(xs);
+}
