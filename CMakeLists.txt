@@ -9,6 +9,7 @@ set(COMMON_SOURCES
     src/antialiasing.c
     src/gw_draw.c
     src/gw_shapes.c
+    src/gw_ui.c
 )
 
 # Wagner's library source files

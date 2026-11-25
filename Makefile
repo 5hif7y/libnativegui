@@ -11,6 +11,7 @@ OBJS = \
     gw_win32_ext.obj \
     gw_draw.obj \
     gw_shapes.obj \
+    gw_ui.obj \
     antialiasing.obj \
     analyse.obj \
     color.obj \
