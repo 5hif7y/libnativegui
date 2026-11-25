@@ -1,7 +1,8 @@
-// X11 dialogs drawn with LibGW + gw_ui (feat/portmaster-ui): message box and
-// open/save file dialogs, without external libraries. Built unless
-// GW_X11_EXTERNAL_DIALOGS (CMake NATIVEGUI_X11_DIALOGS=ON) selects the
-// MessageBox-X11 + sofd versions in gw_x11.c.
+// X11 dialogs drawn with LibGW + gw_ui (feat/portmaster-ui): popup menu,
+// message box and open/save file dialogs, without external libraries. The
+// message box and the file dialogs are left out when GW_X11_EXTERNAL_DIALOGS
+// (CMake NATIVEGUI_X11_DIALOGS=ON) selects the MessageBox-X11 + sofd ones in
+// gw_x11.c; the popup menu is always here.
 //
 // Each dialog is its own window with a modal loop: events of other windows
 // that arrive meanwhile are kept and re-queued when the dialog closes
@@ -13,7 +14,7 @@
 //     Win32 form "Images|*.png;*.jpg|All files|*.*"; NULL = all files.
 // Font: $GW_FONT (a .ttf path) or DejaVu / Noto / Liberation in the usual
 // places; with none, the dialogs print to stderr and return "cancelled".
-#if !defined(_WIN32) && !defined(GW_X11_EXTERNAL_DIALOGS)
+#if !defined(_WIN32)
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE // FNM_CASEFOLD, realpath, strdup
@@ -28,6 +29,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <wchar.h>
+
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
 
 #include "gw.h"
 #include "gw_internal.h"
@@ -89,7 +93,7 @@ static void defer_event(Deferred* d, const GW_Event* e) {
 typedef int (*DialogFrame)(GWUI* ui, void* ctx, const GW_Event* key);
 
 // Runs the modal loop of dialog window w. Escape / close -> cancel_value.
-static int run_modal(GW_Window* w, GWUI* ui, DialogFrame frame, void* ctx, int cancel_value) {
+static int run_modal_ex(GW_Window* w, GWUI* ui, DialogFrame frame, void* ctx, int cancel_value, int close_outside) {
     Deferred* d = (Deferred*)calloc(1, sizeof(Deferred));
     int result = DLG_RUNNING;
     int dirty = 1;
@@ -119,7 +123,16 @@ static int run_modal(GW_Window* w, GWUI* ui, DialogFrame frame, void* ctx, int c
         }
         if (ev.type == GW_EVENT_QUIT) { result = cancel_value; break; }
         if (ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == GW_KEY_ESCAPE) { result = cancel_value; break; }
-        if (ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == GW_KEY_ENTER && !GWUI_TextFocused(ui)) key = ev;
+        if (close_outside && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN) {
+            int ww, wh;
+            GW_GetWindowSize(w, &ww, &wh);
+            if (ev.mouse_button.x < 0 || ev.mouse_button.y < 0 || ev.mouse_button.x >= ww || ev.mouse_button.y >= wh) {
+                result = cancel_value;
+                break;
+            }
+        }
+        // Keys go to the frame too (Enter, arrows) unless a text field has them.
+        if (ev.type == GW_EVENT_KEY_DOWN && !GWUI_TextFocused(ui)) key = ev;
         GWUI_HandleEvent(ui, &ev);
         dirty = 1;
     }
@@ -130,6 +143,118 @@ static int run_modal(GW_Window* w, GWUI* ui, DialogFrame frame, void* ctx, int c
     }
     return result;
 }
+
+static int run_modal(GW_Window* w, GWUI* ui, DialogFrame frame, void* ctx, int cancel_value) {
+    return run_modal_ex(w, ui, frame, ctx, cancel_value, 0);
+}
+
+/* ---- popup menu ------------------------------------------------------------ *
+ * GW_ShowPopupMenu: an override-redirect window at the pointer with the
+ * pointer and keyboard grabbed; click an item, or Up/Down + Enter; Esc or a
+ * click outside = -1. NULL or "" items are separators (as on Win32). */
+
+#define MENU_ITEM_H 28
+#define MENU_SEP_H  9
+#define MENU_PAD    4
+
+typedef struct { const char** items; int count; int hot; } Popup;
+
+static int menu_is_sep(const Popup* m, int i) { return !m->items[i] || !m->items[i][0]; }
+
+static int popup_frame(GWUI* ui, void* ctx, const GW_Event* key) {
+    Popup* m = (Popup*)ctx;
+    const GWUI_Theme* t = GWUI_GetTheme(ui);
+    GW_Window* win = GWUI_GetWindow(ui);
+    if (key) {
+        int k = key->key.keycode, step = 0;
+        if (k == GW_KEY_DOWN) step = 1;
+        else if (k == GW_KEY_UP) step = -1;
+        else if (k == GW_KEY_ENTER && m->hot >= 0) return m->hot;
+        if (step) {
+            int i = m->hot;
+            for (int n = 0; n < m->count; n++) {
+                i = (i + step + m->count) % m->count;
+                if (!menu_is_sep(m, i)) { m->hot = i; break; }
+            }
+        }
+    }
+    int ww, wh;
+    GW_GetWindowSize(win, &ww, &wh);
+    GW_FillRect(win, 0, 0, ww, wh, t->panel & 0xFFFFFF);
+    GW_DrawRoundRect(win, 0, 0, ww, wh, 0, 1, t->border);
+    int y = MENU_PAD;
+    for (int i = 0; i < m->count; i++) {
+        if (menu_is_sep(m, i)) {
+            GW_FillRect(win, 8, y + MENU_SEP_H / 2, ww - 16, 1, t->border & 0xFFFFFF);
+            y += MENU_SEP_H;
+            continue;
+        }
+        GWUI_Rect r = { MENU_PAD, y, ww - 2 * MENU_PAD, MENU_ITEM_H };
+        int hov = 0, held = 0;
+        GWUI_PushIDInt(ui, i);
+        int clicked = GWUI_Interact(ui, GWUI_GetID(ui, "item"), r, &hov, &held);
+        GWUI_PopID(ui);
+        if (hov) m->hot = i;
+        if (i == m->hot) GW_FillRoundRect(win, r.x, r.y, r.w, r.h, 4, t->accent);
+        GWUI_DrawText(ui, (GWUI_Rect){ r.x + 10, r.y, r.w - 20, r.h }, m->items[i], NULL,
+                      i == m->hot ? t->accent_text : t->text, GWUI_ALIGN_LEFT);
+        if (clicked) return i;
+        y += MENU_ITEM_H;
+    }
+    return DLG_RUNNING;
+}
+
+int GW_ShowPopupMenu(GW_Window* owner, const char** items, int count) {
+    (void)owner;
+    if (!items || count <= 0) return -1;
+    GW_Font* font = dialog_font(15.0f);
+    if (!font) { fprintf(stderr, "GW_ShowPopupMenu: no font (set GW_FONT)\n"); return -1; }
+    int width = 120, height = 2 * MENU_PAD;
+    for (int i = 0; i < count; i++) {
+        if (!items[i] || !items[i][0]) { height += MENU_SEP_H; continue; }
+        int tw = 0, th = 0;
+        GW_MeasureTextUTF8(font, items[i], &tw, &th);
+        if (tw + 2 * MENU_PAD + 24 > width) width = tw + 2 * MENU_PAD + 24;
+        height += MENU_ITEM_H;
+    }
+    GW_Window* w = GW_CreateWindow("gw-popup-menu", width, height);
+    if (!w) { GW_FreeFont(font); return -1; }
+    Display* d = (Display*)w->dpy;
+    Window xw = (Window)w->win;
+    XSetWindowAttributes a;
+    memset(&a, 0, sizeof(a));
+    a.override_redirect = True; // no frame, not managed: a menu
+    XChangeWindowAttributes(d, xw, CWOverrideRedirect, &a);
+    int px = 0, py = 0;
+    GW_GetMousePosition(NULL, &px, &py, NULL, NULL);
+    int sw = DisplayWidth(d, DefaultScreen(d)), sh = DisplayHeight(d, DefaultScreen(d));
+    if (px + width > sw) px = sw - width;
+    if (py + height > sh) py = py - height; // open upwards near the bottom (trays)
+    if (px < 0) px = 0;
+    if (py < 0) py = 0;
+    XMoveWindow(d, xw, px, py);
+    XMapRaised(d, xw);
+    XSync(d, False);
+    for (int i = 0; i < 30; i++) { // grabs need a viewable window
+        XWindowAttributes wa;
+        if (XGetWindowAttributes(d, xw, &wa) && wa.map_state == IsViewable) break;
+        usleep(10 * 1000);
+    }
+    XGrabPointer(d, xw, True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                 GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+    XGrabKeyboard(d, xw, True, GrabModeAsync, GrabModeAsync, CurrentTime);
+    GWUI* ui = GWUI_Create(w, font, NULL);
+    Popup m = { items, count, -1 };
+    int r = run_modal_ex(w, ui, popup_frame, &m, -1, 1);
+    XUngrabKeyboard(d, CurrentTime);
+    XUngrabPointer(d, CurrentTime);
+    GWUI_Destroy(ui);
+    GW_DestroyWindow(w);
+    GW_FreeFont(font);
+    return r;
+}
+
+#ifndef GW_X11_EXTERNAL_DIALOGS
 
 /* ---- message box --------------------------------------------------------- */
 
@@ -278,7 +403,8 @@ static void load_dir(FileDlg* f) {
         if (n[0] == '.' && strcmp(n, "..") != 0) continue; // hidden
         if (strcmp(n, "..") == 0 && strcmp(f->dir, "/") == 0) continue;
         char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", strcmp(f->dir, "/") == 0 ? "" : f->dir, n);
+        int fl = snprintf(full, sizeof(full), "%s/%s", strcmp(f->dir, "/") == 0 ? "" : f->dir, n);
+        if (fl < 0 || fl >= (int)sizeof(full)) continue; // path too long to stat
         struct stat st;
         int is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
         if (!is_dir && !matches_filter(f, n)) continue;
@@ -321,7 +447,10 @@ static int accept(FileDlg* f) {
     if (!f->name[0]) return 0;
     char full[PATH_MAX];
     if (f->name[0] == '/') snprintf(full, sizeof(full), "%s", f->name);
-    else snprintf(full, sizeof(full), "%s/%s", strcmp(f->dir, "/") == 0 ? "" : f->dir, f->name);
+    else {
+        int fl = snprintf(full, sizeof(full), "%s/%s", strcmp(f->dir, "/") == 0 ? "" : f->dir, f->name);
+        if (fl < 0 || fl >= (int)sizeof(full)) { snprintf(f->error, sizeof(f->error), "Path too long"); return 0; }
+    }
     struct stat st;
     int exists = stat(full, &st) == 0;
     if (exists && S_ISDIR(st.st_mode)) { // a folder name: go there
@@ -503,4 +632,5 @@ char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* fi
     return file_dialog(parent, title, filter, 1);
 }
 
-#endif // !_WIN32 && !GW_X11_EXTERNAL_DIALOGS
+#endif // !GW_X11_EXTERNAL_DIALOGS
+#endif // !_WIN32

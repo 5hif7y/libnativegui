@@ -23,6 +23,7 @@ struct GW_Window {
     unsigned long win; // Window
     void* gc;       // GC
     void* ximage;   // XImage*
+    void* xic;      // XIC of the input method (NULL without one)
 #endif
 
     // Extensions (feat/portmaster-ui)
@@ -35,6 +36,10 @@ struct GW_Window {
 #ifndef _WIN32
 // X11: queues an event (ev.window must be set), e.g. from a modal loop.
 void gw_x11_push_event(GW_Event ev);
+// X11: extension hooks get every X event first (an XEvent*); returning 1
+// consumes it. Used by the clipboard and the tray icon (gw_x11_ext.c).
+typedef int (*GW_X11_EventHook)(void* xevent);
+void gw_x11_add_event_hook(GW_X11_EventHook hook);
 #endif
 
 #ifdef _WIN32

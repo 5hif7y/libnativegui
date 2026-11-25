@@ -89,7 +89,24 @@ static Window global_win = 0;
 
 static void process_xevent_for(XEvent* xev);
 
+#define GW_MAX_HOOKS 4
+static GW_X11_EventHook event_hooks[GW_MAX_HOOKS];
+
+void gw_x11_add_event_hook(GW_X11_EventHook hook) {
+    for (int i = 0; i < GW_MAX_HOOKS; i++) {
+        if (event_hooks[i] == hook) return;
+        if (!event_hooks[i]) { event_hooks[i] = hook; return; }
+    }
+}
+
+// Input method (XIM): dead keys and compose sequences. Opened with the
+// display; windows get an XIC (pre-edit and status: none, i.e. composed
+// text arrives as plain key presses). Without one, text comes from keysyms.
+static XIM gw_xim = NULL;
+
 static void process_xevent(XEvent* xev) {
+    for (int i = 0; i < GW_MAX_HOOKS && event_hooks[i]; i++)
+        if (event_hooks[i](xev)) return;
     cur_event_window = find_window(xev->xany.window);
     process_xevent_for(xev);
     cur_event_window = NULL;
@@ -217,6 +234,10 @@ static void process_xevent_for(XEvent* xev) {
 
         case FocusIn:
         case FocusOut: {
+            if (cur_event_window && cur_event_window->xic) {
+                if (xev->type == FocusIn) XSetICFocus((XIC)cur_event_window->xic);
+                else XUnsetICFocus((XIC)cur_event_window->xic);
+            }
             GW_Event ev;
             memset(&ev, 0, sizeof(ev));
             ev.type = (xev->type == FocusIn) ? GW_EVENT_FOCUS_GAINED : GW_EVENT_FOCUS_LOST;
@@ -226,19 +247,22 @@ static void process_xevent_for(XEvent* xev) {
         
         case KeyPress:
         case KeyRelease: {
+            // Key code from the plain keysym (unshifted letters are mapped to
+            // 'A'..'Z' like Win32's virtual keys, so Ctrl+A/C/V/X match).
             KeySym keysym;
             char text_buf[8] = {0};
             int len = XLookupString(&xev->xkey, text_buf, sizeof(text_buf), &keysym, NULL);
-            
+
             GW_Event ev;
             memset(&ev, 0, sizeof(ev));
             ev.type = (xev->type == KeyPress) ? GW_EVENT_KEY_DOWN : GW_EVENT_KEY_UP;
-            
+
             int keycode = 0;
             switch (keysym) {
                 case XK_BackSpace: keycode = GW_KEY_BACKSPACE; break;
                 case XK_Tab:       keycode = GW_KEY_TAB; break;
-                case XK_Return:    keycode = GW_KEY_ENTER; break;
+                case XK_Return:
+                case XK_KP_Enter:  keycode = GW_KEY_ENTER; break;
                 case XK_Escape:    keycode = GW_KEY_ESCAPE; break;
                 case XK_Left:      keycode = GW_KEY_LEFT; break;
                 case XK_Up:        keycode = GW_KEY_UP; break;
@@ -250,44 +274,55 @@ static void process_xevent_for(XEvent* xev) {
                 case XK_Page_Up:   keycode = GW_KEY_PAGEUP; break;
                 case XK_Page_Down: keycode = GW_KEY_PAGEDOWN; break;
                 default:
-                    if (keysym >= 32 && keysym <= 126) {
-                        keycode = (int)keysym;
-                    } else {
-                        keycode = (int)keysym; // Fallback to raw keysym
-                    }
+                    if (keysym >= XK_a && keysym <= XK_z) keycode = (int)(keysym - XK_a + 'A');
+                    else keycode = (int)keysym;
                     break;
             }
-            
             ev.key.keycode = keycode;
-            
+
             int mods = 0;
             if (xev->xkey.state & ShiftMask)   mods |= GW_MOD_SHIFT;
             if (xev->xkey.state & ControlMask) mods |= GW_MOD_CTRL;
             if (xev->xkey.state & Mod1Mask)    mods |= GW_MOD_ALT;
             ev.key.mod = mods;
-            
             push_event(ev);
-            
-            // Handle Character Input
-            // The character comes from the keysym, not from mbtowc (which
-            // depends on the C locale): Latin-1 keysyms are their codepoint,
-            // 0x01xxxxxx keysyms carry a Unicode codepoint; anything else
-            // falls back to the ASCII XLookupString gave. Control characters
-            // (Ctrl+letter, Enter, Tab, Backspace) are keys, not text.
-            // No input method (XIM): dead keys and IME composition are not
-            // handled yet.
-            if (xev->type == KeyPress && !(xev->xkey.state & ControlMask)) {
+
+            if (xev->type != KeyPress || (xev->xkey.state & ControlMask)) break;
+
+            // Text. With an input method: Xutf8LookupString (composed
+            // characters, independent of the C locale's charset). Without:
+            // Latin-1 keysyms are their codepoint, 0x01xxxxxx keysyms carry
+            // one, else the ASCII XLookupString gave. Control characters
+            // (Enter, Tab, Backspace, Ctrl+letter) are keys, not text.
+            unsigned cps[32];
+            int ncp = 0;
+            XIC ic = cur_event_window ? (XIC)cur_event_window->xic : NULL;
+            if (ic) {
+                char u8[128];
+                Status st = 0;
+                KeySym ks2;
+                int n = Xutf8LookupString(ic, &xev->xkey, u8, (int)sizeof(u8) - 1, &ks2, &st);
+                if ((st == XLookupChars || st == XLookupBoth) && n > 0) {
+                    u8[n] = 0;
+                    wchar_t w[32];
+                    int nw = GW_UTF8ToWide(u8, w, 32) - 1;
+                    for (int i = 0; i < nw && ncp < 32; i++) cps[ncp++] = (unsigned)w[i];
+                }
+            } else {
                 unsigned cp = 0;
                 if (keysym >= 0x20 && keysym <= 0xFF) cp = (unsigned)keysym;
                 else if ((keysym & 0xFF000000) == 0x01000000) cp = (unsigned)(keysym & 0x00FFFFFF);
                 else if (len == 1 && (unsigned char)text_buf[0] >= 0x20 && (unsigned char)text_buf[0] < 0x7F) cp = (unsigned char)text_buf[0];
-                if (cp >= 0x20 && cp != 0x7F && cp <= 0x10FFFF) {
-                    GW_Event text_ev;
-                    memset(&text_ev, 0, sizeof(text_ev));
-                    text_ev.type = GW_EVENT_TEXT_INPUT;
-                    text_ev.text.character = (wchar_t)cp;
-                    push_event(text_ev);
-                }
+                if (cp) cps[ncp++] = cp;
+            }
+            for (int i = 0; i < ncp; i++) {
+                unsigned cp = cps[i];
+                if (cp < 0x20 || cp == 0x7F || cp > 0x10FFFF) continue;
+                GW_Event text_ev;
+                memset(&text_ev, 0, sizeof(text_ev));
+                text_ev.type = GW_EVENT_TEXT_INPUT;
+                text_ev.text.character = (wchar_t)cp;
+                push_event(text_ev);
             }
             break;
         }
@@ -323,6 +358,12 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
             return NULL;
         }
         WM_DELETE_WINDOW = XInternAtom(global_dpy, "WM_DELETE_WINDOW", False);
+        XSetLocaleModifiers(""); // honours XMODIFIERS (@im=ibus, fcitx...)
+        gw_xim = XOpenIM(global_dpy, NULL, NULL, NULL);
+        if (!gw_xim) {
+            XSetLocaleModifiers("@im=none"); // Xlib's built-in compose only
+            gw_xim = XOpenIM(global_dpy, NULL, NULL, NULL);
+        }
     }
     Display* dpy = global_dpy;
     
@@ -341,10 +382,24 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
         dpy, win,
         ExposureMask | KeyPressMask | KeyReleaseMask |
         ButtonPressMask | ButtonReleaseMask |
-        PointerMotionMask | StructureNotifyMask | FocusChangeMask
+        PointerMotionMask | StructureNotifyMask | FocusChangeMask |
+        PropertyChangeMask
     );
     
     XSetWMProtocols(dpy, win, &WM_DELETE_WINDOW, 1);
+    XIC xic = NULL;
+    if (gw_xim) {
+        xic = XCreateIC(gw_xim, XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+                        XNClientWindow, win, XNFocusWindow, win, (char*)NULL);
+        if (xic) {
+            long im_events = 0;
+            if (!XGetICValues(xic, XNFilterEvents, &im_events, (char*)NULL) && im_events) {
+                XWindowAttributes wa;
+                XGetWindowAttributes(dpy, win, &wa);
+                XSelectInput(dpy, win, wa.your_event_mask | im_events);
+            }
+        }
+    }
     
     GW_Window* gwin = (GW_Window*)malloc(sizeof(GW_Window));
     if (!gwin) {
@@ -355,6 +410,7 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
     memset(gwin, 0, sizeof(GW_Window));
     gwin->dpy = (void*)dpy;
     gwin->win = (unsigned long)win;
+    gwin->xic = (void*)xic;
     gwin->width = width;
     gwin->height = height;
     gwin->gc = (void*)XCreateGC(dpy, win, 0, NULL);
@@ -394,6 +450,7 @@ void GW_DestroyWindow(GW_Window* win) {
         XDestroyImage((XImage*)win->ximage);
     }
     
+    if (win->xic) XDestroyIC((XIC)win->xic);
     XFreeGC(dpy, gc);
     XDestroyWindow(dpy, w);
 
@@ -409,6 +466,7 @@ void GW_DestroyWindow(GW_Window* win) {
         for (int i = 0; i < GW_MAX_WINDOWS; i++) if (windows[i]) { g_active_window = windows[i]; break; }
     }
     if (window_count == 0) {
+        if (gw_xim) { XCloseIM(gw_xim); gw_xim = NULL; }
         XCloseDisplay(dpy);
         global_dpy = NULL;
         global_win = 0;
@@ -554,6 +612,7 @@ static void pump_x(void) {
     XEvent xev;
     while (XPending(global_dpy) > 0) {
         XNextEvent(global_dpy, &xev);
+        if (XFilterEvent(&xev, None)) continue; // consumed by the input method
         process_xevent(&xev);
     }
 }

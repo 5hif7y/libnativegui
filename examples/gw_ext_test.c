@@ -301,22 +301,42 @@ int main(int argc, char** argv) {
     put_button(w, ButtonPress, 1, 4, 5, 0, 7000);
     CHECK(GW_PollEvent(&ev) && ev.mouse_button.clicks == 1, "late click starts over");
 
-    /* keys: text comes from the keysym (no locale needed); Ctrl+key is not text */
+    /* keys: letters are 'A'..'Z' like Win32 virtual keys; text comes from
+       the input method (or the keysym), not the C locale; Ctrl+key is not text */
     while (GW_PollEvent(&ev)) {}
+    printf("input method: %s\n", w->xic ? "XIM" : "none (keysyms)");
     if (put_key(w, XK_a, 0)) {
-        int down = GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == 'a';
-        CHECK(down && GW_PollEvent(&ev) && ev.type == GW_EVENT_TEXT_INPUT && ev.text.character == L'a', "key 'a' -> KEY_DOWN + text 'a'");
+        int down = GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == 'A';
+        CHECK(down && GW_PollEvent(&ev) && ev.type == GW_EVENT_TEXT_INPUT && ev.text.character == L'a', "key 'a' -> KEY_DOWN 'A' + text 'a'");
+        put_key(w, XK_a, ShiftMask);
+        down = GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == 'A' && (ev.key.mod & GW_MOD_SHIFT);
+        CHECK(down && GW_PollEvent(&ev) && ev.type == GW_EVENT_TEXT_INPUT && ev.text.character == L'A', "shift+a -> text 'A'");
         put_key(w, XK_a, ControlMask);
-        CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && (ev.key.mod & GW_MOD_CTRL), "ctrl+a -> KEY_DOWN with ctrl");
+        CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == 'A' && (ev.key.mod & GW_MOD_CTRL), "ctrl+a -> KEY_DOWN 'A' with ctrl (gw_ui select all)");
         CHECK(!GW_PollEvent(&ev), "ctrl+a types no text (%d)", ev.type);
     } else {
         CHECK(0, "keymap has no 'a'");
     }
+    // Dead keys compose through the input method, if the keymap has one.
+    if (w->xic && XKeysymToKeycode((Display*)w->dpy, XK_dead_acute) && XKeysymToKeycode((Display*)w->dpy, XK_e)) {
+        put_key(w, XK_e, 0);           // queued in reverse: XPutBackEvent puts at the head
+        put_key(w, XK_dead_acute, 0);
+        wchar_t got_ch = 0;
+        while (GW_PollEvent(&ev)) if (ev.type == GW_EVENT_TEXT_INPUT) got_ch = ev.text.character;
+        CHECK(got_ch == 0x00E9, "dead acute + e -> U+00E9 (got U+%04X)", (unsigned)got_ch);
+    } else {
+        printf("skip: no dead keys in this keymap (or no input method)\n");
+    }
     put_key(w, XK_Return, 0);
     CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == GW_KEY_ENTER && !GW_PollEvent(&ev), "enter is a key, not text");
 
-    /* clipboard: not implemented on X11 yet (documented stub) */
-    CHECK(GW_SetClipboardText(w, "x") == 0 && GW_GetClipboardText(w) == NULL, "clipboard stub");
+    /* clipboard round trip (CLIPBOARD selection; other apps: gw_dialog_test) */
+    {
+        CHECK(GW_SetClipboardText(w, "h\xc3\xa9llo \xe2\x9c\x93"), "set clipboard");
+        char* got_clip = GW_GetClipboardText(w);
+        CHECK(got_clip && strcmp(got_clip, "h\xc3\xa9llo \xe2\x9c\x93") == 0, "clipboard round trip: %s", got_clip ? got_clip : "(null)");
+        GW_Free(got_clip);
+    }
 
     /* mouse position (screen and client) */
     {
@@ -400,7 +420,8 @@ int main(int argc, char** argv) {
         CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_TRAY && ev.tray.id == 5 && ev.tray.action == GW_TRAY_RIGHT_CLICK, "tray event");
         Sleep(500);
 #else
-        CHECK(t == NULL, "tray icon: NULL on X11 (documented stub)");
+        // NULL without a tray manager (WSLg); docking: gw_dialog_test.
+        printf("tray icon: %s\n", t ? "docked request sent" : "no tray manager");
 #endif
         GW_DestroyTrayIcon(t);
         GW_FreeImage(ti);
