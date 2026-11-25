@@ -55,6 +55,7 @@ if(WIN32)
 else()
     set(PLATFORM_SOURCES
         src/gw_x11.c
+        src/gw_x11_ext.c
     )
     find_package(X11 REQUIRED)
     set(PLATFORM_LIBS

@@ -16,6 +16,8 @@
 #include <sys/ioctl.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/select.h>
+#include <time.h>
 
 // X11 Dialog wrappers (MessageBox-X11 & sofd headers)
 typedef struct {
@@ -39,7 +41,10 @@ static int queue_head = 0;
 static int queue_tail = 0;
 static Atom WM_DELETE_WINDOW;
 
+extern GW_Window* g_active_window;
+
 static void push_event(GW_Event ev) {
+    ev.window = g_active_window;
     int next_head = (queue_head + 1) % EVENT_QUEUE_SIZE;
     if (next_head != queue_tail) {
         event_queue[queue_head] = ev;
@@ -135,10 +140,56 @@ static void process_xevent(XEvent* xev) {
         case ButtonPress:
         case ButtonRelease: {
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            unsigned b = xev->xbutton.button;
+            int mods = 0;
+            if (xev->xbutton.state & ShiftMask)   mods |= GW_MOD_SHIFT;
+            if (xev->xbutton.state & ControlMask) mods |= GW_MOD_CTRL;
+            if (xev->xbutton.state & Mod1Mask)    mods |= GW_MOD_ALT;
+            // Buttons 4-7 are the wheel (4/5 vertical, 6/7 horizontal).
+            if (b >= 4 && b <= 7 && g_active_window && g_active_window->wheel_mode == GW_WHEEL_EVENTS) {
+                if (xev->type == ButtonPress) {
+                    ev.type = GW_EVENT_MOUSE_WHEEL;
+                    ev.wheel.x = xev->xbutton.x;
+                    ev.wheel.y = xev->xbutton.y;
+                    ev.wheel.delta = (b == 4 || b == 7) ? 120 : -120;
+                    ev.wheel.mod = mods;
+                    ev.wheel.horizontal = (b >= 6);
+                    push_event(ev);
+                }
+                break;
+            }
             ev.type = (xev->type == ButtonPress) ? GW_EVENT_MOUSE_BUTTON_DOWN : GW_EVENT_MOUSE_BUTTON_UP;
             ev.mouse_button.x = xev->xbutton.x;
             ev.mouse_button.y = xev->xbutton.y;
-            ev.mouse_button.button = xev->xbutton.button; // 1=left, 2=middle, 3=right
+            ev.mouse_button.button = (int)b; // 1=left, 2=middle, 3=right
+            ev.mouse_button.mod = mods;
+            ev.mouse_button.clicks = 1;
+            if (xev->type == ButtonPress) {
+                // Double click: same button again within 400 ms and 4 px.
+                static Time last_time = 0;
+                static unsigned last_button = 0;
+                static int last_x = -1000, last_y = -1000;
+                if (b == last_button && xev->xbutton.time - last_time <= 400 &&
+                    abs(xev->xbutton.x - last_x) <= 4 && abs(xev->xbutton.y - last_y) <= 4) {
+                    ev.mouse_button.clicks = 2;
+                    last_button = 0; // a third click starts over
+                } else {
+                    last_button = b;
+                }
+                last_time = xev->xbutton.time;
+                last_x = xev->xbutton.x;
+                last_y = xev->xbutton.y;
+            }
+            push_event(ev);
+            break;
+        }
+
+        case FocusIn:
+        case FocusOut: {
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = (xev->type == FocusIn) ? GW_EVENT_FOCUS_GAINED : GW_EVENT_FOCUS_LOST;
             push_event(ev);
             break;
         }
@@ -205,6 +256,8 @@ static void process_xevent(XEvent* xev) {
 // Global active window pointer for resize events
 GW_Window* g_active_window = NULL;
 
+static int ensure_user_pipe(void); // extensions, below
+
 GW_Window* GW_CreateWindow(const char* title, int width, int height) {
     Display* dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -227,7 +280,7 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
         dpy, win,
         ExposureMask | KeyPressMask | KeyReleaseMask |
         ButtonPressMask | ButtonReleaseMask |
-        PointerMotionMask | StructureNotifyMask
+        PointerMotionMask | StructureNotifyMask | FocusChangeMask
     );
     
     WM_DELETE_WINDOW = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
@@ -263,6 +316,9 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
     global_dpy = dpy;
     global_win = win;
     g_active_window = gwin;
+    // Extensions: GW_PostUserEvent may be called from another thread right
+    // after the window exists, before the first wait.
+    ensure_user_pipe();
     
     return gwin;
 }
@@ -313,45 +369,174 @@ void GW_SetWindowTitle(GW_Window* win, const char* title) {
     XFlush(dpy);
 }
 
-int GW_WaitEvent(GW_Event* event) {
-    if (!event) return 0;
-    
-    if (pop_event(event)) {
-        return 1;
-    }
-    
-    if (!global_dpy) return 0;
-    
-    XEvent xev;
-    while (1) {
-        XNextEvent(global_dpy, &xev);
-        process_xevent(&xev);
-        if (pop_event(event)) {
-            return 1;
-        }
-    }
-    return 0;
+/* ---- Extensions (feat/portmaster-ui): user events, timers, timeouts -------
+ * GW_PostUserEvent writes a small record to a self-pipe; writes up to
+ * PIPE_BUF bytes are atomic, so any thread may post. The event loop waits
+ * with select() on the X connection and the pipe, with a timeout from the
+ * next timer and the caller's deadline. */
+
+typedef struct {
+    GW_Window* win;
+    int code;
+    void* data;
+} UserMsg;
+
+static int user_pipe[2] = { -1, -1 };
+
+static int ensure_user_pipe(void) {
+    if (user_pipe[0] >= 0) return 1;
+    if (pipe(user_pipe) != 0) return 0;
+    fcntl(user_pipe[0], F_SETFL, fcntl(user_pipe[0], F_GETFL) | O_NONBLOCK);
+    fcntl(user_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(user_pipe[1], F_SETFD, FD_CLOEXEC);
+    return 1;
 }
 
-int GW_PollEvent(GW_Event* event) {
-    if (!event) return 0;
-    
-    if (pop_event(event)) {
-        return 1;
+int GW_PostUserEvent(GW_Window* win, int code, void* data) {
+    if (!win || user_pipe[1] < 0) return 0;
+    UserMsg m;
+    m.win = win;
+    m.code = code;
+    m.data = data;
+    ssize_t n;
+    do { n = write(user_pipe[1], &m, sizeof(m)); } while (n < 0 && errno == EINTR);
+    return n == (ssize_t)sizeof(m);
+}
+
+static void drain_user_pipe(void) {
+    if (user_pipe[0] < 0) return;
+    UserMsg m;
+    while (read(user_pipe[0], &m, sizeof(m)) == (ssize_t)sizeof(m)) {
+        GW_Event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = GW_EVENT_USER;
+        ev.user.code = m.code;
+        ev.user.data = m.data;
+        push_event(ev);
     }
-    
-    if (!global_dpy) return 0;
-    
+}
+
+uint64_t GW_GetTicks(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+#define GW_MAX_TIMERS 32
+static struct { int used; int id; int interval; uint64_t due; } timers[GW_MAX_TIMERS];
+
+int GW_SetTimer(GW_Window* win, int id, int interval_ms) {
+    if (!win || interval_ms <= 0) return 0;
+    int free_slot = -1;
+    for (int i = 0; i < GW_MAX_TIMERS; i++) {
+        if (timers[i].used && timers[i].id == id) { free_slot = i; break; }
+        if (!timers[i].used && free_slot < 0) free_slot = i;
+    }
+    if (free_slot < 0) return 0;
+    timers[free_slot].used = 1;
+    timers[free_slot].id = id;
+    timers[free_slot].interval = interval_ms;
+    timers[free_slot].due = GW_GetTicks() + (uint64_t)interval_ms;
+    return 1;
+}
+
+void GW_KillTimer(GW_Window* win, int id) {
+    (void)win;
+    for (int i = 0; i < GW_MAX_TIMERS; i++) {
+        if (timers[i].used && timers[i].id == id) timers[i].used = 0;
+    }
+}
+
+// Pushes due timers; returns ms until the next one (-1 = none).
+static int fire_timers(void) {
+    uint64_t now = GW_GetTicks();
+    int64_t next = -1;
+    for (int i = 0; i < GW_MAX_TIMERS; i++) {
+        if (!timers[i].used) continue;
+        if (timers[i].due <= now) {
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = GW_EVENT_TIMER;
+            ev.timer.id = timers[i].id;
+            push_event(ev);
+            // Like WM_TIMER: missed ticks coalesce into one.
+            timers[i].due = now + (uint64_t)timers[i].interval;
+        }
+        int64_t left = (int64_t)(timers[i].due - now);
+        if (next < 0 || left < next) next = left;
+    }
+    return (int)next;
+}
+
+static void pump_x(void) {
     XEvent xev;
     while (XPending(global_dpy) > 0) {
         XNextEvent(global_dpy, &xev);
         process_xevent(&xev);
-        if (pop_event(event)) {
-            return 1;
-        }
     }
-    
+}
+
+int GW_WaitEventTimeout(GW_Event* event, int timeout_ms) {
+    if (!event) return 0;
+    if (pop_event(event)) return 1;
+    if (!global_dpy) return 0;
+    ensure_user_pipe();
+    uint64_t deadline = timeout_ms >= 0 ? GW_GetTicks() + (uint64_t)timeout_ms : 0;
+    for (;;) {
+        pump_x();
+        drain_user_pipe();
+        int next_timer = fire_timers();
+        if (pop_event(event)) return 1;
+
+        int wait = -1;
+        if (timeout_ms >= 0) {
+            uint64_t now = GW_GetTicks();
+            if (now >= deadline) break;
+            wait = (int)(deadline - now);
+        }
+        if (next_timer >= 0 && (wait < 0 || next_timer < wait)) wait = next_timer;
+
+        XFlush(global_dpy);
+        int xfd = ConnectionNumber(global_dpy);
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(xfd, &fds);
+        FD_SET(user_pipe[0], &fds);
+        int maxfd = xfd > user_pipe[0] ? xfd : user_pipe[0];
+        struct timeval tv, *tvp = NULL;
+        if (wait >= 0) {
+            tv.tv_sec = wait / 1000;
+            tv.tv_usec = (wait % 1000) * 1000;
+            tvp = &tv;
+        }
+        if (select(maxfd + 1, &fds, NULL, NULL, tvp) < 0 && errno != EINTR) break;
+    }
+    memset(event, 0, sizeof(*event));
+    event->type = GW_EVENT_NONE;
     return 0;
+}
+
+int GW_WaitEvent(GW_Event* event) {
+    if (!event) return 0;
+    if (pop_event(event)) return 1;
+    if (!global_dpy) return 0;
+    // Same loop as WaitEventTimeout, without a deadline.
+    return GW_WaitEventTimeout(event, -1);
+}
+
+int GW_PollEvent(GW_Event* event) {
+    if (!event) return 0;
+
+    if (pop_event(event)) {
+        return 1;
+    }
+
+    if (!global_dpy) return 0;
+
+    pump_x();
+    drain_user_pipe();
+    fire_timers();
+    return pop_event(event);
 }
 
 uint32_t* GW_GetBackbuffer(GW_Window* win, int* width, int* height) {
