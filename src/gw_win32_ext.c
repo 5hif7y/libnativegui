@@ -322,4 +322,14 @@ int GW_ShowPopupMenu(GW_Window* owner, const char** items, int count) {
     return cmd > 0 ? cmd - 1 : -1;
 }
 
+void GW_GetMousePosition(GW_Window* win, int* sx, int* sy, int* wx, int* wy) {
+    POINT pt = { 0, 0 };
+    GetCursorPos(&pt);
+    if (sx) *sx = pt.x;
+    if (sy) *sy = pt.y;
+    if (win && win->hwnd) ScreenToClient((HWND)win->hwnd, &pt);
+    if (wx) *wx = pt.x;
+    if (wy) *wy = pt.y;
+}
+
 #endif // _WIN32

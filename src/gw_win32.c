@@ -652,12 +652,42 @@ char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* fi
     return NULL;
 }
 
+// Both conversions always NUL-terminate: a result that does not fit is
+// truncated (never in the middle of a surrogate pair or a UTF-8 sequence)
+// instead of failing with an unterminated buffer. The return value counts
+// the terminator; 0 on bad arguments.
 int GW_UTF8ToWide(const char* utf8, wchar_t* wide, int max_wide_chars) {
-    return MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, max_wide_chars);
+    if (!utf8 || !wide || max_wide_chars <= 0) return 0;
+    int need = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (need > 0 && need <= max_wide_chars)
+        return MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, max_wide_chars);
+    wchar_t* tmp = need > 0 ? (wchar_t*)malloc((size_t)need * sizeof(wchar_t)) : NULL;
+    int n = 0;
+    if (tmp && MultiByteToWideChar(CP_UTF8, 0, utf8, -1, tmp, need) > 0) {
+        n = max_wide_chars - 1;
+        if (n > 0 && tmp[n - 1] >= 0xD800 && tmp[n - 1] <= 0xDBFF) n--; // keep pairs whole
+        memcpy(wide, tmp, (size_t)n * sizeof(wchar_t));
+    }
+    free(tmp);
+    wide[n] = 0;
+    return n + 1;
 }
 
 int GW_WideToUTF8(const wchar_t* wide, char* utf8, int max_utf8_bytes) {
-    return WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, max_utf8_bytes, NULL, NULL);
+    if (!wide || !utf8 || max_utf8_bytes <= 0) return 0;
+    int need = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    if (need > 0 && need <= max_utf8_bytes)
+        return WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, max_utf8_bytes, NULL, NULL);
+    char* tmp = need > 0 ? (char*)malloc((size_t)need) : NULL;
+    int n = 0;
+    if (tmp && WideCharToMultiByte(CP_UTF8, 0, wide, -1, tmp, need, NULL, NULL) > 0) {
+        n = max_utf8_bytes - 1;
+        while (n > 0 && ((unsigned char)tmp[n] & 0xC0) == 0x80) n--; // keep sequences whole
+        memcpy(utf8, tmp, (size_t)n);
+    }
+    free(tmp);
+    utf8[n] = 0;
+    return n + 1;
 }
 
 // Windows implementation of GW_Process

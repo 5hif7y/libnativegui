@@ -104,8 +104,8 @@ void Events(int newdata) {
             int mx = ev.mouse_button.x;
             int my = ev.mouse_button.y;
             int button = ev.mouse_button.button;
-            int Shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-            int Ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            int Shift = (ev.mouse_button.mod & GW_MOD_SHIFT) != 0;
+            int Ctrl = (ev.mouse_button.mod & GW_MOD_CTRL) != 0;
 
             for (i = 0; i < nowindows + 1; i++) {
                 if (windows[i].installed && windows[i].myw == ev.window) {

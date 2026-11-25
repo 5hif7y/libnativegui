@@ -1,15 +1,28 @@
 // Automated checks for gw_ui (feat/portmaster-ui): feeds synthetic events
 // to GWUI_HandleEvent and checks what the widgets return. Never shows the
-// window. Windows for now (font path).
+// window. Win32 and X11; font: $GW_TEST_FONT or the platform default.
 //
 // Build (Developer prompt, repo root, after building the library):
 //   cl /nologo /MD /Iinclude examples\gw_ui_test.c build\nativegui.lib user32.lib gdi32.lib comdlg32.lib shell32.lib /Fe:build\gw_ui_test.exe
+// Linux (X11):
+//   cc -Iinclude examples/gw_ui_test.c build/libnativegui.a -lX11 -lm -o build/gw_ui_test
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "gw.h"
 #include "gw_ui.h"
 
 static int fails = 0, checks = 0;
+/* Test font: $GW_TEST_FONT, else a platform default. */
+static const char* test_font(void) {
+    const char* f = getenv("GW_TEST_FONT");
+    if (f && *f) return f;
+#ifdef _WIN32
+    return "C:\\Windows\\Fonts\\segoeui.ttf";
+#else
+    return "/usr/share/fonts/TTF/DejaVuSans.ttf";
+#endif
+}
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* The program's state and one frame of its UI. */
@@ -98,7 +111,7 @@ static void wheel(GWUI* ui, App* a, int x, int y, int delta) {
 
 int main(void) {
     GW_Window* win = GW_CreateWindow("gw_ui_test", 400, 480);
-    GW_Font* font = GW_LoadFont("C:\\Windows\\Fonts\\segoeui.ttf", 15.0f);
+    GW_Font* font = GW_LoadFont(test_font(), 15.0f);
     GWUI* ui = GWUI_Create(win, font, NULL);
     CHECK(win && font && ui, "setup");
     App a;

@@ -1,7 +1,12 @@
 #ifndef X11_COMPAT_H
 #define X11_COMPAT_H
 
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #define EndMenu wagner_EndMenu
 #define DestroyMenu wagner_DestroyMenu
 #include "gw.h"
@@ -107,18 +112,7 @@ typedef unsigned long KeySym;
 #define XK_Return 0x0D
 
 static inline int XQueryPointer(Display *myd, Window w, Window *myroot, Window *mychild, int *rx, int *ry, int *wx, int *wy, unsigned int *kb) {
-    POINT pt;
-    GetCursorPos(&pt);
-    *rx = pt.x;
-    *ry = pt.y;
-    if (w && ((uintptr_t)w > 0x10000)) {
-        ScreenToClient((HWND)w->hwnd, &pt);
-        *wx = pt.x;
-        *wy = pt.y;
-    } else {
-        *wx = pt.x;
-        *wy = pt.y;
-    }
+    GW_GetMousePosition((w && ((uintptr_t)w > 0x10000)) ? w : NULL, rx, ry, wx, wy);
     *kb = 0;
     return 1;
 }

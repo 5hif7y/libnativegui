@@ -1,17 +1,39 @@
-// Automated checks for the LibGW extensions (feat/portmaster-ui).
-// Windows only for now: it synthesizes window messages to test the event
-// paths. Never shows the window. The user's clipboard text is saved and
-// restored. --tray also adds a tray icon for a moment.
+// Automated checks for the LibGW extensions (feat/portmaster-ui), Win32
+// and X11. It synthesizes window messages (Win32) or puts X events back on
+// the queue (X11) to test the event paths. Never shows the window. The
+// user's clipboard text is saved and restored. --tray also adds a tray icon
+// for a moment. Font: $GW_TEST_FONT or the platform default (test_font).
 //
 // Build (Developer prompt, from the repo root, after building the library):
 //   cl /nologo /Iinclude examples\gw_ext_test.c build\nativegui.lib user32.lib gdi32.lib comdlg32.lib shell32.lib /Fe:build\gw_ext_test.exe
+// Linux (X11):
+//   cc -Iinclude -Isrc examples/gw_ext_test.c build/libnativegui.a -lX11 -lm -lpthread -o build/gw_ext_test
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <pthread.h>
+#include <unistd.h>
+#endif
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include "gw.h"
 #include "gw_internal.h"
 
 static int fails = 0, checks = 0;
+/* Test font: $GW_TEST_FONT, else a platform default. */
+static const char* test_font(void) {
+    const char* f = getenv("GW_TEST_FONT");
+    if (f && *f) return f;
+#ifdef _WIN32
+    return "C:\\Windows\\Fonts\\segoeui.ttf";
+#else
+    return "/usr/share/fonts/TTF/DejaVuSans.ttf";
+#endif
+}
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 static uint32_t px(GW_Window* w, int x, int y) {
@@ -29,17 +51,58 @@ static int wait_for(GW_Event* ev, GW_EventType type, int timeout_ms) {
     return 0;
 }
 
+#ifdef _WIN32
 static DWORD WINAPI poster(LPVOID p) {
     Sleep(30);
     GW_PostUserEvent((GW_Window*)p, 42, (void*)(intptr_t)0x1234);
     return 0;
 }
+#else
+static void* poster(void* p) {
+    usleep(30 * 1000);
+    GW_PostUserEvent((GW_Window*)p, 42, (void*)(intptr_t)0x1234);
+    return NULL;
+}
+
+/* Puts a synthetic button event at the head of the window's X queue. */
+static void put_button(GW_Window* w, int type, unsigned button, int x, int y, unsigned state, Time t) {
+    XEvent xe;
+    memset(&xe, 0, sizeof(xe));
+    xe.xbutton.type = type;
+    xe.xbutton.display = (Display*)w->dpy;
+    xe.xbutton.window = (Window)w->win;
+    xe.xbutton.button = button;
+    xe.xbutton.x = x;
+    xe.xbutton.y = y;
+    xe.xbutton.state = state;
+    xe.xbutton.time = t;
+    XPutBackEvent((Display*)w->dpy, &xe);
+}
+
+/* Same for a key press of the key that types keysym (0 if not in the keymap). */
+static int put_key(GW_Window* w, KeySym keysym, unsigned state) {
+    Display* d = (Display*)w->dpy;
+    KeyCode kc = XKeysymToKeycode(d, keysym);
+    if (!kc) return 0;
+    XEvent xe;
+    memset(&xe, 0, sizeof(xe));
+    xe.xkey.type = KeyPress;
+    xe.xkey.display = d;
+    xe.xkey.window = (Window)w->win;
+    xe.xkey.keycode = kc;
+    xe.xkey.state = state;
+    XPutBackEvent(d, &xe);
+    return 1;
+}
+#endif
 
 int main(int argc, char** argv) {
     int with_tray = argc > 1 && strcmp(argv[1], "--tray") == 0;
     GW_Window* w = GW_CreateWindow("gw_ext_test", 200, 120);
     if (!w) { printf("FAIL: no window\n"); return 1; }
+#ifdef _WIN32
     HWND hwnd = (HWND)w->hwnd;
+#endif
     int bw, bh;
     GW_GetBackbuffer(w, &bw, &bh);
     CHECK(bw == 200 && bh == 120, "backbuffer %dx%d", bw, bh);
@@ -107,7 +170,7 @@ int main(int argc, char** argv) {
     CHECK(GW_LoadImageFromMemory((const unsigned char*)"not an image", 12) == NULL, "bad image -> NULL, silently");
 
     /* fonts and text */
-    FILE* f = fopen("C:\\Windows\\Fonts\\segoeui.ttf", "rb");
+    FILE* f = fopen(test_font(), "rb");
     GW_Font* font = NULL;
     if (f) {
         fseek(f, 0, SEEK_END);
@@ -119,7 +182,7 @@ int main(int argc, char** argv) {
         font = GW_LoadFontFromMemory(data, (int)n, 16.0f);
         free(data); // the font keeps its own copy
     }
-    CHECK(font != NULL, "font from memory");
+    CHECK(font != NULL, "font from memory (%s)", test_font());
     if (font) {
         int a, d, lh, w1, h1, w2, h2;
         GW_GetFontMetrics(font, &a, &d, &lh);
@@ -130,8 +193,22 @@ int main(int argc, char** argv) {
         int we, he;
         GW_MeasureTextUTF8(font, "\xf0\x9f\x98\x80", &we, &he);   // U+1F600 as UTF-8
         int we2, he2;
+#ifdef _WIN32
         GW_MeasureText(font, L"\xD83D\xDE00", &we2, &he2);          // same as a surrogate pair
         CHECK(we == we2, "surrogate pair = one codepoint: %d %d", we, we2);
+#else
+        GW_MeasureText(font, L"\U0001F600", &we2, &he2);            // wchar_t is UTF-32 here
+        CHECK(we == we2, "utf-8 emoji = one wide codepoint: %d %d", we, we2);
+#endif
+        {
+            wchar_t wb[16];
+            char ub[32];
+            int nw = GW_UTF8ToWide("\xc3\xb1" "a\xf0\x9f\x98\x80", wb, 16);
+            int nu = GW_WideToUTF8(wb, ub, 32);
+            CHECK(strcmp(ub, "\xc3\xb1" "a\xf0\x9f\x98\x80") == 0 && nu == 8, "utf-8 -> wide -> utf-8 round trip (%d, %d)", nw, nu);
+            GW_UTF8ToWide("abcdef", wb, 4);
+            CHECK(wcscmp(wb, L"abc") == 0, "utf8->wide truncates and terminates");
+        }
         GW_MeasureTextUTF8(font, "\xff\xfe", &we, &he);             // invalid UTF-8: no crash
         GW_Clear(w, 0x000000);
         GW_SetClipRect(w, 0, 0, 30, 120);
@@ -151,17 +228,27 @@ int main(int argc, char** argv) {
     CHECK(GW_WaitEventTimeout(&ev, 80) == 0 && ev.type == GW_EVENT_NONE, "idle wait -> NONE (%d)", ev.type);
     uint64_t dt = GW_GetTicks() - t0;
     CHECK(dt >= 70 && dt < 1000, "timeout took %llu ms", (unsigned long long)dt);
+#ifdef _WIN32
     HANDLE th = CreateThread(NULL, 0, poster, w, 0, NULL);
+#else
+    pthread_t th;
+    pthread_create(&th, NULL, poster, w);
+#endif
     CHECK(wait_for(&ev, GW_EVENT_USER, 2000) && ev.user.code == 42 && ev.user.data == (void*)(intptr_t)0x1234 && ev.window == w,
           "user event from a thread");
+#ifdef _WIN32
     WaitForSingleObject(th, INFINITE);
     CloseHandle(th);
+#else
+    pthread_join(th, NULL);
+#endif
     CHECK(GW_SetTimer(w, 7, 40), "set timer");
     int ticks = 0;
     for (int i = 0; i < 3; i++) if (wait_for(&ev, GW_EVENT_TIMER, 1000) && ev.timer.id == 7) ticks++;
     CHECK(ticks == 3, "3 timer ticks, got %d", ticks);
     GW_KillTimer(w, 7);
 
+#ifdef _WIN32
     /* wheel: legacy keys by default, real events when asked */
     while (GW_PollEvent(&ev)) {}
     SendMessageW(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, 120), MAKELPARAM(0, 0));
@@ -188,25 +275,94 @@ int main(int argc, char** argv) {
     GW_Free(got);
     if (saved) { GW_SetClipboardText(w, saved); GW_Free(saved); }
 
+#else
+    /* wheel: legacy buttons 4/5 by default, real events when asked */
+    while (GW_PollEvent(&ev)) {}
+    put_button(w, ButtonPress, 4, 0, 0, 0, 1000);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN && ev.mouse_button.button == 4, "legacy wheel -> button 4 (%d)", ev.type);
+    GW_SetWheelMode(w, GW_WHEEL_EVENTS);
+    put_button(w, ButtonPress, 5, 15, 25, ShiftMask, 2000);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_WHEEL && ev.wheel.delta == -120 && ev.wheel.x == 15 && ev.wheel.y == 25 && !ev.wheel.horizontal && (ev.wheel.mod & GW_MOD_SHIFT),
+          "wheel event: type %d delta %d at %d,%d", ev.type, ev.wheel.delta, ev.wheel.x, ev.wheel.y);
+    put_button(w, ButtonRelease, 5, 15, 25, 0, 2001);
+    CHECK(!GW_PollEvent(&ev), "wheel release is dropped (%d)", ev.type);
+    put_button(w, ButtonPress, 6, 15, 25, 0, 2100);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_WHEEL && ev.wheel.horizontal, "button 6 -> horizontal wheel");
+
+    /* double click and button details */
+    put_button(w, ButtonPress, 1, 3, 4, ControlMask, 5000);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN && ev.mouse_button.clicks == 1 && (ev.mouse_button.mod & GW_MOD_CTRL),
+          "first click: clicks=1 with ctrl");
+    put_button(w, ButtonPress, 1, 4, 5, 0, 5200);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN && ev.mouse_button.clicks == 2 && ev.mouse_button.button == 1,
+          "second click within 400 ms -> DOWN clicks=2");
+    put_button(w, ButtonRelease, 1, 4, 5, 0, 5250);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_UP && ev.mouse_button.clicks == 1, "button up");
+    put_button(w, ButtonPress, 1, 4, 5, 0, 7000);
+    CHECK(GW_PollEvent(&ev) && ev.mouse_button.clicks == 1, "late click starts over");
+
+    /* keys: text comes from the keysym (no locale needed); Ctrl+key is not text */
+    while (GW_PollEvent(&ev)) {}
+    if (put_key(w, XK_a, 0)) {
+        int down = GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == 'a';
+        CHECK(down && GW_PollEvent(&ev) && ev.type == GW_EVENT_TEXT_INPUT && ev.text.character == L'a', "key 'a' -> KEY_DOWN + text 'a'");
+        put_key(w, XK_a, ControlMask);
+        CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && (ev.key.mod & GW_MOD_CTRL), "ctrl+a -> KEY_DOWN with ctrl");
+        CHECK(!GW_PollEvent(&ev), "ctrl+a types no text (%d)", ev.type);
+    } else {
+        CHECK(0, "keymap has no 'a'");
+    }
+    put_key(w, XK_Return, 0);
+    CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_KEY_DOWN && ev.key.keycode == GW_KEY_ENTER && !GW_PollEvent(&ev), "enter is a key, not text");
+
+    /* clipboard: not implemented on X11 yet (documented stub) */
+    CHECK(GW_SetClipboardText(w, "x") == 0 && GW_GetClipboardText(w) == NULL, "clipboard stub");
+
+    /* mouse position (screen and client) */
+    {
+        int sx = -1, sy = -1, cx2 = -1, cy2 = -1;
+        GW_GetMousePosition(w, &sx, &sy, &cx2, &cy2);
+        CHECK(sx >= 0 && sy >= 0, "mouse position %d,%d (client %d,%d)", sx, sy, cx2, cy2);
+        GW_GetMousePosition(NULL, &sx, &sy, NULL, NULL);
+        CHECK(sx >= 0 && sy >= 0, "mouse position without a window %d,%d", sx, sy);
+    }
+
+#endif
+
     /* misc */
     GW_SetCursor(w, GW_CURSOR_HAND);
     float scale = GW_GetDpiScale(w);
     CHECK(scale >= 1.0f && scale <= 4.0f, "dpi scale %.2f", scale);
     GW_SetMinWindowSize(w, 300, 200);
+#ifdef _WIN32
     SetWindowPos(hwnd, NULL, 0, 0, 50, 50, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     GW_GetBackbuffer(w, &bw, &bh);
     CHECK(bw >= 300 && bh >= 200, "min size enforced on SetWindowPos: %dx%d", bw, bh);
+#else
+    {
+        // X11: the window manager enforces it; check WM_NORMAL_HINTS.
+        XSizeHints hints;
+        long supplied = 0;
+        Status ok = XGetWMNormalHints((Display*)w->dpy, (Window)w->win, &hints, &supplied);
+        CHECK(ok && (hints.flags & PMinSize) && hints.min_width == 300 && hints.min_height == 200,
+              "min size hint: %d %dx%d", (int)ok, hints.min_width, hints.min_height);
+    }
+#endif
     CHECK(!GW_IsWindowVisible(w), "never shown");
 
     if (with_tray) {
         GW_Image* ti = GW_CreateImage(2, 2, raw);
         GW_TrayIcon* t = GW_CreateTrayIcon(w, 5, ti, "gw_ext_test");
+#ifdef _WIN32
         CHECK(t != NULL, "tray icon");
         GW_SetTrayTooltip(t, "gw_ext_test \xe2\x9c\x93");
         while (GW_PollEvent(&ev)) {} // drop the resize events of the min-size check
         SendMessageW(hwnd, GW_WM_TRAY, 5, WM_RBUTTONUP);
         CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_TRAY && ev.tray.id == 5 && ev.tray.action == GW_TRAY_RIGHT_CLICK, "tray event");
         Sleep(500);
+#else
+        CHECK(t == NULL, "tray icon: NULL on X11 (documented stub)");
+#endif
         GW_DestroyTrayIcon(t);
         GW_FreeImage(ti);
     }

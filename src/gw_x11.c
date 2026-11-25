@@ -19,7 +19,11 @@
 #include <sys/select.h>
 #include <time.h>
 
-// X11 Dialog wrappers (MessageBox-X11 & sofd headers)
+// Dialogs. With GW_X11_EXTERNAL_DIALOGS (CMake NATIVEGUI_X11_DIALOGS=ON) they
+// use MessageBox-X11 and sofd (x_fib), which must be linked in: neither is
+// part of this repository. Without it, the fallbacks below print to stderr
+// and report "cancelled" (-1 / NULL), so the library links on its own.
+#ifdef GW_X11_EXTERNAL_DIALOGS
 typedef struct {
     wchar_t *label;
     int result;
@@ -33,6 +37,7 @@ extern int x_fib_handle_events (Display *dpy, XEvent *event);
 extern int x_fib_status ();
 extern char *x_fib_filename ();
 extern int x_fib_configure (int k, const char *v);
+#endif
 
 // Event queue for X11
 #define EVENT_QUEUE_SIZE 256
@@ -81,7 +86,6 @@ static void process_xevent(XEvent* xev) {
         }
         
         case ConfigureNotify: {
-            GW_Window* win = NULL;
             // Find window matching (since we have single window usually, we can map to global_win)
             // In our implementation, we will query via a global or by checking user data if X11 supported context.
             // For a single window library, mapping to a global window is standard and works perfectly.
@@ -201,6 +205,7 @@ static void process_xevent(XEvent* xev) {
             int len = XLookupString(&xev->xkey, text_buf, sizeof(text_buf), &keysym, NULL);
             
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
             ev.type = (xev->type == KeyPress) ? GW_EVENT_KEY_DOWN : GW_EVENT_KEY_UP;
             
             int keycode = 0;
@@ -238,13 +243,23 @@ static void process_xevent(XEvent* xev) {
             push_event(ev);
             
             // Handle Character Input
-            if (xev->type == KeyPress && len > 0) {
-                GW_Event text_ev;
-                text_ev.type = GW_EVENT_TEXT_INPUT;
-                wchar_t wch = 0;
-                int res = mbtowc(&wch, text_buf, len);
-                if (res > 0) {
-                    text_ev.text.character = wch;
+            // The character comes from the keysym, not from mbtowc (which
+            // depends on the C locale): Latin-1 keysyms are their codepoint,
+            // 0x01xxxxxx keysyms carry a Unicode codepoint; anything else
+            // falls back to the ASCII XLookupString gave. Control characters
+            // (Ctrl+letter, Enter, Tab, Backspace) are keys, not text.
+            // No input method (XIM): dead keys and IME composition are not
+            // handled yet.
+            if (xev->type == KeyPress && !(xev->xkey.state & ControlMask)) {
+                unsigned cp = 0;
+                if (keysym >= 0x20 && keysym <= 0xFF) cp = (unsigned)keysym;
+                else if ((keysym & 0xFF000000) == 0x01000000) cp = (unsigned)(keysym & 0x00FFFFFF);
+                else if (len == 1 && (unsigned char)text_buf[0] >= 0x20 && (unsigned char)text_buf[0] < 0x7F) cp = (unsigned char)text_buf[0];
+                if (cp >= 0x20 && cp != 0x7F && cp <= 0x10FFFF) {
+                    GW_Event text_ev;
+                    memset(&text_ev, 0, sizeof(text_ev));
+                    text_ev.type = GW_EVENT_TEXT_INPUT;
+                    text_ev.text.character = (wchar_t)cp;
                     push_event(text_ev);
                 }
             }
@@ -557,6 +572,8 @@ void GW_Present(GW_Window* win) {
     XFlush(dpy);
 }
 
+#ifdef GW_X11_EXTERNAL_DIALOGS
+
 int GW_ShowMessageBox(GW_Window* parent, const char* title, const wchar_t* text, const wchar_t** buttons, int num_buttons) {
     // Map to MessageBox-X11 buttons
     X11_Button* x11_buttons = (X11_Button*)malloc(num_buttons * sizeof(X11_Button));
@@ -613,12 +630,69 @@ char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* fi
     return NULL;
 }
 
+#else // !GW_X11_EXTERNAL_DIALOGS
+
+int GW_ShowMessageBox(GW_Window* parent, const char* title, const wchar_t* text, const wchar_t** buttons, int num_buttons) {
+    (void)parent; (void)buttons; (void)num_buttons;
+    fprintf(stderr, "[%s] %ls\n(no X11 message box built in: NATIVEGUI_X11_DIALOGS is off)\n", title ? title : "", text ? text : L"");
+    return -1;
+}
+
+char* GW_ShowOpenFileDialog(GW_Window* parent, const char* title, const char* filter) {
+    (void)parent; (void)title; (void)filter;
+    fprintf(stderr, "GW_ShowOpenFileDialog: no X11 file dialog built in (NATIVEGUI_X11_DIALOGS is off)\n");
+    return NULL;
+}
+
+char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* filter) {
+    (void)parent; (void)title; (void)filter;
+    fprintf(stderr, "GW_ShowSaveFileDialog: no X11 file dialog built in (NATIVEGUI_X11_DIALOGS is off)\n");
+    return NULL;
+}
+
+#endif // GW_X11_EXTERNAL_DIALOGS
+
+// UTF-8 <-> wchar_t (UTF-32 here), independent of the C locale (mbstowcs
+// needs setlocale and fails on non-ASCII in the default "C" locale). Like
+// the Win32 versions: the result is NUL-terminated and the return value
+// counts the terminator; invalid UTF-8 bytes become U+FFFD.
 int GW_UTF8ToWide(const char* utf8, wchar_t* wide, int max_wide_chars) {
-    return (int)mbstowcs(wide, utf8, max_wide_chars);
+    if (!utf8 || !wide || max_wide_chars <= 0) return 0;
+    const unsigned char* s = (const unsigned char*)utf8;
+    int n = 0;
+    while (*s && n < max_wide_chars - 1) {
+        unsigned c = *s, cp, need;
+        if (c < 0x80)      { cp = c; need = 0; }
+        else if (c >= 0xC2 && c < 0xE0) { cp = c & 0x1F; need = 1; }
+        else if (c >= 0xE0 && c < 0xF0) { cp = c & 0x0F; need = 2; }
+        else if (c >= 0xF0 && c < 0xF5) { cp = c & 0x07; need = 3; }
+        else { wide[n++] = 0xFFFD; s++; continue; }
+        s++;
+        unsigned i = 0;
+        for (; i < need && (*s & 0xC0) == 0x80; i++, s++) cp = (cp << 6) | (*s & 0x3F);
+        if (i < need || (need == 2 && cp < 0x800) || (need == 3 && (cp < 0x10000 || cp > 0x10FFFF)) ||
+            (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+        wide[n++] = (wchar_t)cp;
+    }
+    wide[n] = 0;
+    return n + 1;
 }
 
 int GW_WideToUTF8(const wchar_t* wide, char* utf8, int max_utf8_bytes) {
-    return (int)wcstombs(utf8, wide, max_utf8_bytes);
+    if (!wide || !utf8 || max_utf8_bytes <= 0) return 0;
+    int n = 0;
+    for (; *wide; wide++) {
+        unsigned cp = (unsigned)*wide;
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+        int len = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+        if (n + len > max_utf8_bytes - 1) break;
+        if (len == 1) utf8[n++] = (char)cp;
+        else if (len == 2) { utf8[n++] = (char)(0xC0 | (cp >> 6)); utf8[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else if (len == 3) { utf8[n++] = (char)(0xE0 | (cp >> 12)); utf8[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); utf8[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else { utf8[n++] = (char)(0xF0 | (cp >> 18)); utf8[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); utf8[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); utf8[n++] = (char)(0x80 | (cp & 0x3F)); }
+    }
+    utf8[n] = 0;
+    return n + 1;
 }
 
 // X11/Linux implementation of GW_Process

@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 static Drawable mydrawable;
 static Drawable mydrawabledouble;
@@ -847,7 +850,11 @@ int initPS(char *filename, double _xsize, double _ysize,
     PSfile = fopen(PSfilename, "w");
     if (PSfile == NULL) {
         fprintf(stderr, "Could not open file %s! Waiting... ", PSfilename);
+#ifdef _WIN32
         Sleep(4000);
+#else
+        sleep(4);
+#endif
         PSfile = fopen(PSfilename, "w");
         if (PSfile == NULL) {
             fprintf(stderr, " failed again!\n");

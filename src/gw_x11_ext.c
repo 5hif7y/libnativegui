@@ -153,4 +153,30 @@ void GW_RequestRedraw(GW_Window* win) {
     XFlush((Display*)win->dpy);
 }
 
+void GW_GetMousePosition(GW_Window* win, int* sx, int* sy, int* wx, int* wy) {
+    int rx = 0, ry = 0, cx = 0, cy = 0;
+    if (win && win->dpy) {
+        Display* d = (Display*)win->dpy;
+        Window root, child;
+        unsigned int mask;
+        if (XQueryPointer(d, (Window)win->win, &root, &child, &rx, &ry, &cx, &cy, &mask) == False) {
+            cx = rx; cy = ry;
+        }
+    } else {
+        // No window: open a short-lived connection for the screen position.
+        Display* d = XOpenDisplay(NULL);
+        if (d) {
+            Window root, child;
+            unsigned int mask;
+            XQueryPointer(d, DefaultRootWindow(d), &root, &child, &rx, &ry, &cx, &cy, &mask);
+            XCloseDisplay(d);
+        }
+        cx = rx; cy = ry;
+    }
+    if (sx) *sx = rx;
+    if (sy) *sy = ry;
+    if (wx) *wx = cx;
+    if (wy) *wy = cy;
+}
+
 #endif // !_WIN32

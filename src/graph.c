@@ -472,9 +472,9 @@ void DefineGraphN_N(char *Name,int *data,int *dim,int *req){
 	      graph[graphno].maxanzN_N*sizeof(char *));
     graph[graphno].dimN_N = (dim1 *) 
       realloc(graph[graphno].dimN_N,graph[graphno].maxanzN_N*sizeof(dim1));
-    graph[graphno].pN_N = (double **) 
+    graph[graphno].pN_N = (int **) 
       realloc(graph[graphno].pN_N,
-	      graph[graphno].maxanzN_N*sizeof(double *));
+	      graph[graphno].maxanzN_N*sizeof(int *));
     graph[graphno].dN_N = (grdat *)
       realloc(graph[graphno].dN_N,graph[graphno].maxanzN_N*sizeof(grdat));
     graph[graphno].reqN_N = (int **)
@@ -643,8 +643,8 @@ void DefineGraphNxN_N(char *Name,int *data,
       realloc(graph[graphno].NxN_Nname,graph[graphno].maxanzNxN_N*sizeof(char *));
     graph[graphno].dimNxN_N = (dim2 *) 
       realloc(graph[graphno].dimNxN_N,graph[graphno].maxanzNxN_N*sizeof(dim2));
-    graph[graphno].pNxN_N = (double **) 
-      realloc(graph[graphno].pNxN_N,graph[graphno].maxanzNxN_N*sizeof(double *));
+    graph[graphno].pNxN_N = (int **) 
+      realloc(graph[graphno].pNxN_N,graph[graphno].maxanzNxN_N*sizeof(int *));
     graph[graphno].reqNxN_N = (int **)
       realloc(graph[graphno].reqNxN_N,graph[graphno].maxanzNxN_N*sizeof(int*));
   }

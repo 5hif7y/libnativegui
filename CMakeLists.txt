@@ -6,6 +6,9 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 option(NATIVEGUI_STATIC_CRT "MSVC: link the static C runtime (/MT)" OFF)
+# X11: use MessageBox-X11 and sofd (x_fib) for GW_ShowMessageBox and the file
+# dialogs. They are not in this repository: link them yourself when ON.
+option(NATIVEGUI_X11_DIALOGS "X11: external MessageBox-X11 + sofd dialogs" OFF)
 if(NATIVEGUI_STATIC_CRT)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
@@ -74,6 +77,9 @@ else()
         m # Math library for Unix-like OS
     )
     include_directories(${X11_INCLUDE_DIR})
+    if(NATIVEGUI_X11_DIALOGS)
+        add_compile_definitions(GW_X11_EXTERNAL_DIALOGS)
+    endif()
 endif()
 
 # Define the static library target

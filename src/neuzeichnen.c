@@ -1493,7 +1493,7 @@ void neu_zeichnen2(Display *myd,mywindow *mw,int PS,char *psname,
 			&nxsize,&nysize,mw->menu->zd->nz2.Xlabel,mw->menu->zd->nz2.Ylabel);
   }
 
-  mygrvecdat=(grdat *)malloc((graph->anzNxN_RxR+graph->anzNxN_RxRp)*sizeof(grvecdat));
+  mygrvecdat=(grvecdat *)malloc((graph->anzNxN_RxR+graph->anzNxN_RxRp)*sizeof(grvecdat));
   memcpy(mygrvecdat,graph->dNxN_RxR,graph->anzNxN_RxR*sizeof(grvecdat));
   memcpy(&mygrvecdat[graph->anzNxN_RxR],graph->dNxN_RxRp,graph->anzNxN_RxRp*sizeof(grvecdat));
 

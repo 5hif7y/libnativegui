@@ -263,6 +263,9 @@ float GW_GetDpiScale(GW_Window* win);
 void GW_SetWindowIcon(GW_Window* win, GW_Image* icon);
 void GW_SetMinWindowSize(GW_Window* win, int min_w, int min_h);
 void GW_FocusWindow(GW_Window* win);   // restore if minimised, bring to front
+// Mouse position on the screen (sx, sy) and relative to win's client area
+// (wx, wy; equal to the screen position if win is NULL). Any pointer may be NULL.
+void GW_GetMousePosition(GW_Window* win, int* sx, int* sy, int* wx, int* wy);
 int  GW_IsWindowVisible(GW_Window* win);
 // Requests a GW_EVENT_WINDOW_EXPOSE soon (e.g. after state changed).
 void GW_RequestRedraw(GW_Window* win);
