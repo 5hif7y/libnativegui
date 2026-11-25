@@ -69,6 +69,25 @@ static void resize_backbuffer(GW_Window* win, int new_w, int new_h) {
     win->backbuffer = (uint32_t*)bits;
 }
 
+// Private window messages (extensions): GW_WM_USER_EVENT and GW_WM_TRAY
+// are in gw_internal.h (shared with gw_win32_ext.c).
+#ifndef WM_DPICHANGED
+#define GW_WM_DPICHANGED 0x02E0
+#else
+#define GW_WM_DPICHANGED WM_DPICHANGED
+#endif
+#ifndef WM_MOUSEHWHEEL
+#define WM_MOUSEHWHEEL 0x020E
+#endif
+
+static int current_mods(void) {
+    int mods = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= GW_MOD_SHIFT;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= GW_MOD_CTRL;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= GW_MOD_ALT;
+    return mods;
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     GW_Window* win = (GW_Window*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     
@@ -115,24 +134,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         
         case WM_LBUTTONDOWN:
         case WM_MBUTTONDOWN:
-        case WM_RBUTTONDOWN: {
+        case WM_RBUTTONDOWN:
+        case WM_LBUTTONDBLCLK:   // CS_DBLCLKS: the second press of a double
+        case WM_MBUTTONDBLCLK:   // click arrives as *DBLCLK; it is still a
+        case WM_RBUTTONDBLCLK: { // BUTTON_DOWN, with clicks = 2.
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
             ev.type = GW_EVENT_MOUSE_BUTTON_DOWN;
             ev.mouse_button.x = GET_X_LPARAM(lParam);
             ev.mouse_button.y = GET_Y_LPARAM(lParam);
-            ev.mouse_button.button = (message == WM_LBUTTONDOWN) ? 1 : ((message == WM_MBUTTONDOWN) ? 2 : 3);
+            ev.mouse_button.button = (message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK) ? 1 :
+                                     ((message == WM_MBUTTONDOWN || message == WM_MBUTTONDBLCLK) ? 2 : 3);
+            ev.mouse_button.mod = current_mods();
+            ev.mouse_button.clicks = (message == WM_LBUTTONDBLCLK || message == WM_MBUTTONDBLCLK || message == WM_RBUTTONDBLCLK) ? 2 : 1;
+            // Keep receiving motion/up while dragging outside the window.
+            SetCapture(hwnd);
             push_event(ev);
             return 0;
         }
-        
+
         case WM_LBUTTONUP:
         case WM_MBUTTONUP:
         case WM_RBUTTONUP: {
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
             ev.type = GW_EVENT_MOUSE_BUTTON_UP;
             ev.mouse_button.x = GET_X_LPARAM(lParam);
             ev.mouse_button.y = GET_Y_LPARAM(lParam);
             ev.mouse_button.button = (message == WM_LBUTTONUP) ? 1 : ((message == WM_MBUTTONUP) ? 2 : 3);
+            ev.mouse_button.mod = current_mods();
+            ev.mouse_button.clicks = 1;
+            if (!(wParam & (MK_LBUTTON | MK_MBUTTON | MK_RBUTTON))) ReleaseCapture();
             push_event(ev);
             return 0;
         }
@@ -189,12 +221,111 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
 
-        case WM_MOUSEWHEEL: {
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEHWHEEL: {
             short delta = GET_WHEEL_DELTA_WPARAM(wParam);
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            if (win && win->wheel_mode == GW_WHEEL_EVENTS) {
+                POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }; // screen coords
+                ScreenToClient(hwnd, &pt);
+                ev.type = GW_EVENT_MOUSE_WHEEL;
+                ev.wheel.x = pt.x;
+                ev.wheel.y = pt.y;
+                // WM_MOUSEHWHEEL: > 0 = right; keep "> 0 = forward" for vertical.
+                ev.wheel.delta = delta;
+                ev.wheel.mod = current_mods();
+                ev.wheel.horizontal = (message == WM_MOUSEHWHEEL);
+                push_event(ev);
+                return 0;
+            }
+            if (message == WM_MOUSEHWHEEL) break; // legacy mode: vertical only
             ev.type = GW_EVENT_KEY_DOWN;
             ev.key.keycode = (delta > 0) ? '+' : '-';
             ev.key.mod = 0;
+            push_event(ev);
+            return 0;
+        }
+
+        /* ---- Extensions (feat/portmaster-ui) ---- */
+
+        case WM_TIMER: {
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = GW_EVENT_TIMER;
+            ev.timer.id = (int)wParam;
+            push_event(ev);
+            return 0;
+        }
+
+        case GW_WM_USER_EVENT: {
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = GW_EVENT_USER;
+            ev.user.code = (int)wParam;
+            ev.user.data = (void*)lParam;
+            push_event(ev);
+            return 0;
+        }
+
+        case GW_WM_TRAY: {
+            // NOTIFYICON_VERSION 0 semantics: lParam = mouse message, wParam = id.
+            int action = 0;
+            switch (LOWORD(lParam)) {
+                case WM_LBUTTONUP:     action = GW_TRAY_CLICK; break;
+                case WM_RBUTTONUP:     action = GW_TRAY_RIGHT_CLICK; break;
+                case WM_LBUTTONDBLCLK: action = GW_TRAY_DOUBLE_CLICK; break;
+            }
+            if (action) {
+                GW_Event ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = GW_EVENT_TRAY;
+                ev.tray.action = action;
+                ev.tray.id = (int)wParam;
+                push_event(ev);
+            }
+            return 0;
+        }
+
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS: {
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = (message == WM_SETFOCUS) ? GW_EVENT_FOCUS_GAINED : GW_EVENT_FOCUS_LOST;
+            push_event(ev);
+            return 0;
+        }
+
+        case WM_SETCURSOR: {
+            if (win && win->cursor && LOWORD(lParam) == HTCLIENT) {
+                SetCursor((HCURSOR)win->cursor);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_GETMINMAXINFO: {
+            if (win && (win->min_w > 0 || win->min_h > 0)) {
+                RECT r = { 0, 0, win->min_w, win->min_h };
+                AdjustWindowRect(&r, (DWORD)GetWindowLongW(hwnd, GWL_STYLE), FALSE);
+                MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+                if (win->min_w > 0) mmi->ptMinTrackSize.x = r.right - r.left;
+                if (win->min_h > 0) mmi->ptMinTrackSize.y = r.bottom - r.top;
+                return 0;
+            }
+            break;
+        }
+
+        case GW_WM_DPICHANGED: {
+            // Apply the size Windows suggests for the new DPI (WM_SIZE follows
+            // and resizes the backbuffer), then tell the program.
+            RECT* r = (RECT*)lParam;
+            SetWindowPos(hwnd, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = GW_EVENT_DPI_CHANGED;
+            ev.dpi.scale = HIWORD(wParam) / 96.0f;
             push_event(ev);
             return 0;
         }
@@ -209,7 +340,7 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
     if (!class_registered) {
         WNDCLASSW wc;
         memset(&wc, 0, sizeof(wc));
-        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
         wc.lpfnWndProc = WndProc;
         wc.hInstance = hinstance;
         wc.hIcon = LoadIconW(hinstance, MAKEINTRESOURCEW(1));
@@ -283,8 +414,10 @@ void GW_DestroyWindow(GW_Window* win) {
     if (win->hdc) {
         ReleaseDC(hwnd, (HDC)win->hdc);
     }
-    
+
     DestroyWindow(hwnd);
+    if (win->icon_big) DestroyIcon((HICON)win->icon_big);
+    if (win->icon_small) DestroyIcon((HICON)win->icon_small);
     free(win);
 }
 
@@ -342,12 +475,41 @@ int GW_PollEvent(GW_Event* event) {
     while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
-        
+
         if (pop_event(event)) {
             return 1;
         }
     }
-    
+
+    return 0;
+}
+
+// Extension: GW_WaitEvent with a timeout. Sleeps in MsgWaitForMultipleObjects,
+// so posted user events, timers and input all wake it.
+int GW_WaitEventTimeout(GW_Event* event, int timeout_ms) {
+    if (!event) return 0;
+    if (timeout_ms < 0) return GW_WaitEvent(event);
+    if (pop_event(event)) return 1;
+
+    ULONGLONG deadline = GetTickCount64() + (ULONGLONG)timeout_ms;
+    for (;;) {
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                memset(event, 0, sizeof(*event));
+                event->type = GW_EVENT_QUIT;
+                return 0;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            if (pop_event(event)) return 1;
+        }
+        ULONGLONG now = GetTickCount64();
+        if (now >= deadline) break;
+        MsgWaitForMultipleObjectsEx(0, NULL, (DWORD)(deadline - now), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+    memset(event, 0, sizeof(*event));
+    event->type = GW_EVENT_NONE;
     return 0;
 }
 

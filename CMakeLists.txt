@@ -8,6 +8,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(COMMON_SOURCES
     src/antialiasing.c
     src/gw_draw.c
+    src/gw_shapes.c
 )
 
 # Wagner's library source files
@@ -42,6 +43,7 @@ set(WAGNER_SOURCES
 if(WIN32)
     set(PLATFORM_SOURCES
         src/gw_win32.c
+        src/gw_win32_ext.c
     )
     set(PLATFORM_LIBS
         user32
