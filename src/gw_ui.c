@@ -43,6 +43,7 @@ struct GWUI {
 
     // input accumulated since the last frame
     int mx, my, down, pressed, released, dbl, mods, wheel;
+    int last_click_dbl; // the last left press was a double click (kept until the next press)
     char text_in[128];
     int text_len;
     int keys[32];
@@ -207,6 +208,19 @@ const GWUI_Theme* GWUI_GetTheme(GWUI* ui) { return ui ? &ui->t : NULL; }
 GW_Window* GWUI_GetWindow(GWUI* ui) { return ui ? ui->win : NULL; }
 void GWUI_RequestFrame(GWUI* ui) { if (ui) ui->again = 1; }
 int GWUI_TextFocused(GWUI* ui) { return ui && ui->focus != 0; }
+int GWUI_LastClickWasDouble(GWUI* ui) { return ui && ui->last_click_dbl; }
+
+void GWUI_FocusText(GWUI* ui, const char* id_str) {
+    if (!ui) return;
+    GWUI_Id id = GWUI_GetID(ui, id_str);
+    if (ui->focus == id) return;
+    ui->focus = id;
+    ui->text_scroll = 0;
+    ui->caret = 1 << 30; // clamped to the end by GWUI_TextInput
+    ui->select_all = 0;
+    ui->caret_t0 = GW_GetTicks();
+    ui->again = 1;
+}
 
 /* ---- input --------------------------------------------------------------------- */
 
@@ -237,6 +251,7 @@ void GWUI_HandleEvent(GWUI* ui, const GW_Event* ev) {
                 ui->down = 1;
                 ui->pressed = 1;
                 ui->dbl = ev->mouse_button.clicks >= 2;
+                ui->last_click_dbl = ui->dbl;
                 ui->mods = ev->mouse_button.mod;
             }
             break;

@@ -7,7 +7,8 @@ if(POLICY CMP0091)
 endif()
 option(NATIVEGUI_STATIC_CRT "MSVC: link the static C runtime (/MT)" OFF)
 # X11: use MessageBox-X11 and sofd (x_fib) for GW_ShowMessageBox and the file
-# dialogs. They are not in this repository: link them yourself when ON.
+# dialogs instead of the built-in ones (gw_x11_dialogs.c). They are not in
+# this repository: link them yourself when ON.
 option(NATIVEGUI_X11_DIALOGS "X11: external MessageBox-X11 + sofd dialogs" OFF)
 if(NATIVEGUI_STATIC_CRT)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -70,6 +71,7 @@ else()
     set(PLATFORM_SOURCES
         src/gw_x11.c
         src/gw_x11_ext.c
+        src/gw_x11_dialogs.c
     )
     find_package(X11 REQUIRED)
     set(PLATFORM_LIBS

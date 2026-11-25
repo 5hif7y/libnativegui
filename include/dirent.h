@@ -6,6 +6,12 @@
  * under the MIT license.  For all details and documentation, see
  * https://github.com/tronkko/dirent
  */
+/* libnativegui: this shim is for MSVC only; elsewhere use the system
+ * <dirent.h> (it would otherwise shadow it through -Iinclude). */
+#if !defined(_WIN32)
+#include_next <dirent.h>
+#else
+
 #ifndef DIRENT_H
 #define DIRENT_H
 
@@ -1205,3 +1211,5 @@ dirent_set_errno(int error)
 }
 #endif
 #endif /*DIRENT_H*/
+
+#endif /* !_WIN32 */

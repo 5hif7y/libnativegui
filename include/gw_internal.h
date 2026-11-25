@@ -32,6 +32,11 @@ struct GW_Window {
     int min_w, min_h;              // GW_SetMinWindowSize (client size)
 };
 
+#ifndef _WIN32
+// X11: queues an event (ev.window must be set), e.g. from a modal loop.
+void gw_x11_push_event(GW_Event ev);
+#endif
+
 #ifdef _WIN32
 // Private window messages of the Win32 backend (WM_APP + n).
 #define GW_WM_USER_EVENT (0x8000 + 1)

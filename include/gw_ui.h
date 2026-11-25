@@ -83,6 +83,12 @@ void GWUI_RequestFrame(GWUI* ui);
 // True while a text field is focused (caret blinking: the program may run a
 // GW timer and redraw).
 int  GWUI_TextFocused(GWUI* ui);
+// True if the last left-button press was a double click: check it when a
+// widget reports a click (clicks fire on release) to tell "open" from "select".
+int  GWUI_LastClickWasDouble(GWUI* ui);
+// Focuses the text field id (same ID scope as its GWUI_TextInput), caret at
+// the end: call it in the frame, before that field.
+void GWUI_FocusText(GWUI* ui, const char* id);
 
 // Identity scopes.
 void GWUI_PushID(GWUI* ui, const char* str);

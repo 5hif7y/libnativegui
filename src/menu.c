@@ -240,7 +240,7 @@ void mapwindow(Display *myd,mywindow *mw,int myx, int myy)
   if (mw->type&menutypemask)
     {
       for (i=0; i<mw->nomenu; i++)
-	mw->menuw[i] = (Drawable)(1000 + mw->number * 100 + i);
+	mw->menuw[i] = (Drawable)(uintptr_t)(1000 + mw->number * 100 + i); /* fake id, see x11_compat.h */
     }
   
   if (mw->type&zeichentypemask)

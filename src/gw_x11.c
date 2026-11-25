@@ -21,8 +21,8 @@
 
 // Dialogs. With GW_X11_EXTERNAL_DIALOGS (CMake NATIVEGUI_X11_DIALOGS=ON) they
 // use MessageBox-X11 and sofd (x_fib), which must be linked in: neither is
-// part of this repository. Without it, the fallbacks below print to stderr
-// and report "cancelled" (-1 / NULL), so the library links on its own.
+// part of this repository. Without it (the default), gw_x11_dialogs.c draws
+// them with LibGW + gw_ui.
 #ifdef GW_X11_EXTERNAL_DIALOGS
 typedef struct {
     wchar_t *label;
@@ -48,8 +48,23 @@ static Atom WM_DELETE_WINDOW;
 
 extern GW_Window* g_active_window;
 
+/* Several windows share one X connection (global_dpy, opened by the first
+ * GW_CreateWindow, closed with the last GW_DestroyWindow). Events carry the
+ * GW_Window they belong to: X events by their XID (windows[]), timers and
+ * user events by the window they were created for. */
+#define GW_MAX_WINDOWS 32
+static GW_Window* windows[GW_MAX_WINDOWS];
+static int window_count = 0;
+static GW_Window* cur_event_window = NULL; // window of the X event being processed
+
+static GW_Window* find_window(Window w) {
+    for (int i = 0; i < GW_MAX_WINDOWS; i++)
+        if (windows[i] && (Window)windows[i]->win == w) return windows[i];
+    return NULL;
+}
+
 static void push_event(GW_Event ev) {
-    ev.window = g_active_window;
+    if (!ev.window) ev.window = cur_event_window ? cur_event_window : g_active_window;
     int next_head = (queue_head + 1) % EVENT_QUEUE_SIZE;
     if (next_head != queue_tail) {
         event_queue[queue_head] = ev;
@@ -57,21 +72,35 @@ static void push_event(GW_Event ev) {
     }
 }
 
+// For other X11 sources (dialogs re-queue events of other windows).
+void gw_x11_push_event(GW_Event ev) { push_event(ev); }
+
 static int pop_event(GW_Event* ev) {
-    if (queue_head == queue_tail) return 0;
-    *ev = event_queue[queue_tail];
-    queue_tail = (queue_tail + 1) % EVENT_QUEUE_SIZE;
-    return 1;
+    while (queue_head != queue_tail) {
+        *ev = event_queue[queue_tail];
+        queue_tail = (queue_tail + 1) % EVENT_QUEUE_SIZE;
+        if (ev->type != GW_EVENT_NONE || ev->window) return 1; // NONE + NULL = dropped
+    }
+    return 0;
 }
 
 static Display* global_dpy = NULL;
 static Window global_win = 0;
 
+static void process_xevent_for(XEvent* xev);
+
 static void process_xevent(XEvent* xev) {
+    cur_event_window = find_window(xev->xany.window);
+    process_xevent_for(xev);
+    cur_event_window = NULL;
+}
+
+static void process_xevent_for(XEvent* xev) {
     switch (xev->type) {
         case ClientMessage: {
             if ((Atom)xev->xclient.data.l[0] == WM_DELETE_WINDOW) {
                 GW_Event ev;
+                memset(&ev, 0, sizeof(ev));
                 ev.type = GW_EVENT_QUIT;
                 push_event(ev);
             }
@@ -80,42 +109,37 @@ static void process_xevent(XEvent* xev) {
         
         case Expose: {
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
             ev.type = GW_EVENT_WINDOW_EXPOSE;
             push_event(ev);
             break;
         }
         
         case ConfigureNotify: {
-            // Find window matching (since we have single window usually, we can map to global_win)
-            // In our implementation, we will query via a global or by checking user data if X11 supported context.
-            // For a single window library, mapping to a global window is standard and works perfectly.
-            // Let's assume win is the active window.
-            // We'll read the global window structure.
-            // (X11 doesn't have an easy GWLP_USERDATA, so we can store a global active window pointer)
-            extern GW_Window* g_active_window;
-            if (g_active_window && xev->xconfigure.window == (Window)g_active_window->win) {
+            GW_Window* cw = cur_event_window;
+            if (cw) {
                 int new_w = xev->xconfigure.width;
                 int new_h = xev->xconfigure.height;
-                if (new_w != g_active_window->width || new_h != g_active_window->height) {
-                    Display* dpy = (Display*)g_active_window->dpy;
+                if (new_w != cw->width || new_h != cw->height) {
+                    Display* dpy = (Display*)cw->dpy;
                     int ds = DefaultScreen(dpy);
                     
-                    if (g_active_window->ximage) {
+                    if (cw->ximage) {
                         // Destroy old XImage and its buffer
-                        XDestroyImage((XImage*)g_active_window->ximage);
+                        XDestroyImage((XImage*)cw->ximage);
                     }
                     
-                    g_active_window->width = new_w;
-                    g_active_window->height = new_h;
-                    g_active_window->backbuffer = (uint32_t*)malloc(new_w * new_h * sizeof(uint32_t));
+                    cw->width = new_w;
+                    cw->height = new_h;
+                    cw->backbuffer = (uint32_t*)malloc(new_w * new_h * sizeof(uint32_t));
                     
-                    g_active_window->ximage = XCreateImage(
+                    cw->ximage = XCreateImage(
                         dpy,
                         DefaultVisual(dpy, ds),
                         DefaultDepth(dpy, ds),
                         ZPixmap,
                         0,
-                        (char*)g_active_window->backbuffer,
+                        (char*)cw->backbuffer,
                         new_w,
                         new_h,
                         32,
@@ -123,6 +147,7 @@ static void process_xevent(XEvent* xev) {
                     );
                     
                     GW_Event ev;
+                    memset(&ev, 0, sizeof(ev));
                     ev.type = GW_EVENT_WINDOW_RESIZE;
                     ev.resize.width = new_w;
                     ev.resize.height = new_h;
@@ -134,6 +159,7 @@ static void process_xevent(XEvent* xev) {
         
         case MotionNotify: {
             GW_Event ev;
+            memset(&ev, 0, sizeof(ev));
             ev.type = GW_EVENT_MOUSE_MOTION;
             ev.mouse_motion.x = xev->xmotion.x;
             ev.mouse_motion.y = xev->xmotion.y;
@@ -151,7 +177,7 @@ static void process_xevent(XEvent* xev) {
             if (xev->xbutton.state & ControlMask) mods |= GW_MOD_CTRL;
             if (xev->xbutton.state & Mod1Mask)    mods |= GW_MOD_ALT;
             // Buttons 4-7 are the wheel (4/5 vertical, 6/7 horizontal).
-            if (b >= 4 && b <= 7 && g_active_window && g_active_window->wheel_mode == GW_WHEEL_EVENTS) {
+            if (b >= 4 && b <= 7 && cur_event_window && cur_event_window->wheel_mode == GW_WHEEL_EVENTS) {
                 if (xev->type == ButtonPress) {
                     ev.type = GW_EVENT_MOUSE_WHEEL;
                     ev.wheel.x = xev->xbutton.x;
@@ -271,14 +297,34 @@ static void process_xevent(XEvent* xev) {
 // Global active window pointer for resize events
 GW_Window* g_active_window = NULL;
 
+static int gw_x11_error_handler(Display* d, XErrorEvent* e) {
+    char msg[160];
+    XGetErrorText(d, e->error_code, msg, sizeof(msg));
+    fprintf(stderr, "LibGW X11 error: %s (request %d.%d, resource 0x%lx)\n",
+            msg, e->request_code, e->minor_code, e->resourceid);
+    return 0;
+}
+
 static int ensure_user_pipe(void); // extensions, below
+static void gw_kill_window_timers(GW_Window* win);
 
 GW_Window* GW_CreateWindow(const char* title, int width, int height) {
-    Display* dpy = XOpenDisplay(NULL);
-    if (!dpy) {
-        fprintf(stderr, "LibGW Error: Failed to open X11 Display.\n");
+    if (window_count >= GW_MAX_WINDOWS) {
+        fprintf(stderr, "LibGW Error: too many windows (%d).\n", GW_MAX_WINDOWS);
         return NULL;
     }
+    if (!global_dpy) {
+        // Xlib's default error handler exits the process on any protocol
+        // error (BadMatch, BadWindow...); log them instead.
+        XSetErrorHandler(gw_x11_error_handler);
+        global_dpy = XOpenDisplay(NULL);
+        if (!global_dpy) {
+            fprintf(stderr, "LibGW Error: Failed to open X11 Display.\n");
+            return NULL;
+        }
+        WM_DELETE_WINDOW = XInternAtom(global_dpy, "WM_DELETE_WINDOW", False);
+    }
+    Display* dpy = global_dpy;
     
     int ds = DefaultScreen(dpy);
     Window win = XCreateSimpleWindow(
@@ -298,13 +344,12 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
         PointerMotionMask | StructureNotifyMask | FocusChangeMask
     );
     
-    WM_DELETE_WINDOW = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(dpy, win, &WM_DELETE_WINDOW, 1);
     
     GW_Window* gwin = (GW_Window*)malloc(sizeof(GW_Window));
     if (!gwin) {
         XDestroyWindow(dpy, win);
-        XCloseDisplay(dpy);
+        if (window_count == 0) { XCloseDisplay(dpy); global_dpy = NULL; }
         return NULL;
     }
     memset(gwin, 0, sizeof(GW_Window));
@@ -328,9 +373,10 @@ GW_Window* GW_CreateWindow(const char* title, int width, int height) {
         0
     );
     
-    global_dpy = dpy;
     global_win = win;
     g_active_window = gwin;
+    for (int i = 0; i < GW_MAX_WINDOWS; i++) if (!windows[i]) { windows[i] = gwin; break; }
+    window_count++;
     // Extensions: GW_PostUserEvent may be called from another thread right
     // after the window exists, before the first wait.
     ensure_user_pipe();
@@ -350,10 +396,24 @@ void GW_DestroyWindow(GW_Window* win) {
     
     XFreeGC(dpy, gc);
     XDestroyWindow(dpy, w);
-    XCloseDisplay(dpy);
-    
+
+    for (int i = 0; i < GW_MAX_WINDOWS; i++) if (windows[i] == win) windows[i] = NULL;
+    window_count--;
+    // Queued events of this window would point to freed memory: drop them.
+    for (int i = queue_tail; i != queue_head; i = (i + 1) % EVENT_QUEUE_SIZE)
+        if (event_queue[i].window == win) event_queue[i].type = GW_EVENT_NONE, event_queue[i].window = NULL;
+    // Its timers go with it (Win32 kills a window's timers on destroy).
+    gw_kill_window_timers(win);
     if (g_active_window == win) {
         g_active_window = NULL;
+        for (int i = 0; i < GW_MAX_WINDOWS; i++) if (windows[i]) { g_active_window = windows[i]; break; }
+    }
+    if (window_count == 0) {
+        XCloseDisplay(dpy);
+        global_dpy = NULL;
+        global_win = 0;
+    } else {
+        XFlush(dpy);
     }
     free(win);
 }
@@ -425,6 +485,7 @@ static void drain_user_pipe(void) {
         GW_Event ev;
         memset(&ev, 0, sizeof(ev));
         ev.type = GW_EVENT_USER;
+        ev.window = m.win;
         ev.user.code = m.code;
         ev.user.data = m.data;
         push_event(ev);
@@ -438,28 +499,33 @@ uint64_t GW_GetTicks(void) {
 }
 
 #define GW_MAX_TIMERS 32
-static struct { int used; int id; int interval; uint64_t due; } timers[GW_MAX_TIMERS];
+static struct { int used; int id; int interval; uint64_t due; GW_Window* win; } timers[GW_MAX_TIMERS];
 
 int GW_SetTimer(GW_Window* win, int id, int interval_ms) {
     if (!win || interval_ms <= 0) return 0;
     int free_slot = -1;
     for (int i = 0; i < GW_MAX_TIMERS; i++) {
-        if (timers[i].used && timers[i].id == id) { free_slot = i; break; }
+        if (timers[i].used && timers[i].id == id && timers[i].win == win) { free_slot = i; break; }
         if (!timers[i].used && free_slot < 0) free_slot = i;
     }
     if (free_slot < 0) return 0;
     timers[free_slot].used = 1;
     timers[free_slot].id = id;
+    timers[free_slot].win = win;
     timers[free_slot].interval = interval_ms;
     timers[free_slot].due = GW_GetTicks() + (uint64_t)interval_ms;
     return 1;
 }
 
 void GW_KillTimer(GW_Window* win, int id) {
-    (void)win;
     for (int i = 0; i < GW_MAX_TIMERS; i++) {
-        if (timers[i].used && timers[i].id == id) timers[i].used = 0;
+        if (timers[i].used && timers[i].id == id && timers[i].win == win) timers[i].used = 0;
     }
+}
+
+static void gw_kill_window_timers(GW_Window* win) {
+    for (int i = 0; i < GW_MAX_TIMERS; i++)
+        if (timers[i].used && timers[i].win == win) timers[i].used = 0;
 }
 
 // Pushes due timers; returns ms until the next one (-1 = none).
@@ -472,6 +538,7 @@ static int fire_timers(void) {
             GW_Event ev;
             memset(&ev, 0, sizeof(ev));
             ev.type = GW_EVENT_TIMER;
+            ev.window = timers[i].win;
             ev.timer.id = timers[i].id;
             push_event(ev);
             // Like WM_TIMER: missed ticks coalesce into one.
@@ -630,27 +697,9 @@ char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* fi
     return NULL;
 }
 
-#else // !GW_X11_EXTERNAL_DIALOGS
-
-int GW_ShowMessageBox(GW_Window* parent, const char* title, const wchar_t* text, const wchar_t** buttons, int num_buttons) {
-    (void)parent; (void)buttons; (void)num_buttons;
-    fprintf(stderr, "[%s] %ls\n(no X11 message box built in: NATIVEGUI_X11_DIALOGS is off)\n", title ? title : "", text ? text : L"");
-    return -1;
-}
-
-char* GW_ShowOpenFileDialog(GW_Window* parent, const char* title, const char* filter) {
-    (void)parent; (void)title; (void)filter;
-    fprintf(stderr, "GW_ShowOpenFileDialog: no X11 file dialog built in (NATIVEGUI_X11_DIALOGS is off)\n");
-    return NULL;
-}
-
-char* GW_ShowSaveFileDialog(GW_Window* parent, const char* title, const char* filter) {
-    (void)parent; (void)title; (void)filter;
-    fprintf(stderr, "GW_ShowSaveFileDialog: no X11 file dialog built in (NATIVEGUI_X11_DIALOGS is off)\n");
-    return NULL;
-}
-
 #endif // GW_X11_EXTERNAL_DIALOGS
+// Without GW_X11_EXTERNAL_DIALOGS the dialogs are in gw_x11_dialogs.c.
+
 
 // UTF-8 <-> wchar_t (UTF-32 here), independent of the C locale (mbstowcs
 // needs setlocale and fails on non-ASCII in the default "C" locale). Like

@@ -30,14 +30,27 @@ e-mail: Alexander.Wagner@ndsu.nodak.edu
 #include "fftn.h"
 #include "analyse.h"
 
+/* getgraph3d() (and getcenter()) are not part of this library any more: the
+ * calls were commented out when the sources were restructured, which left
+ * the functions below reading uninitialised pointers and sizes. Until they
+ * are wired to a data source again they report it and return "no data"
+ * (0 / NULL / zeroed outputs) instead of crashing. GetStructFactFromData,
+ * my_calc_center, get_minmax and the S* helpers take their data as
+ * arguments and work. */
+static void no_graph_data(const char* fn)
+{
+  fprintf(stderr, "analyse: %s: no data source (getgraph3d is not available)\n", fn);
+}
+
 void savegrdata(grstr graph,char *name,int no,int rough)
 {
   double *gp=NULL;
   FILE *gfile;
-  int x,y,xmax,ymax;
+  int x,y,xmax=0,ymax=0;
   /*
   getgraph3d(graph,Scalar,&gp,&xmax,&ymax,no,rough,1,1);
   */
+  if (!gp) { no_graph_data("savegrdata"); return; }
   gfile=fopen(name,"w");
   for (x=0; x<xmax; x++)
     {
@@ -51,12 +64,13 @@ void savegrdata(grstr graph,char *name,int no,int rough)
 
 double calc_vol(grstr graph, int nogr, double cut)
 {
-  int i,x_size,y_size;
-  double *g;
+  int i,x_size=0,y_size=0;
+  double *g=NULL;
   register  double gt,vol=0,n;
   /*
   getgraph3d(graph,Scalar,&g,&x_size,&y_size,nogr,1,1,1);
   */
+  if (!g) { no_graph_data("calc_vol"); return 0; }
   n=0;
   for (i=0; i<x_size*y_size; i++)
     {
@@ -98,10 +112,12 @@ int calc_ABtet(grstr graph,double *a, double *b, double *tet)
 {
   int x,y,i,x_size,y_size;
   register  double n=0,gt;
-  double center[2],T[2][2] = {{0.,0.},{0.,0.}},l[2],tmp,*g;
+  double center[2],T[2][2] = {{0.,0.},{0.,0.}},l[2],tmp,*g=NULL;
   /*
   getgraph3d(graph,Scalar,&g,&x_size,&y_size,0,1,1,1);
   */
+  x_size=y_size=0;
+  if (!g) { no_graph_data("calc_ABtet"); *a=0;*b=0;*tet=0; return 0; }
   if (!my_calc_center(g,center,x_size,y_size))
     {
       for (x=0; x<x_size; x++)
@@ -175,12 +191,13 @@ double calc_D(grstr graph,double *tet)
 
 int checkcontours(grstr graph,double cut)
 {
-  int l,*length,nox,noy,boundary=0;
+  int l,*length,nox=0,noy=0,boundary=0;
   double *cont,*gp=NULL;
 
   /*
-  getgraph3d(graph,Scalar,&gp,&nox,&noy,0,1,1,1);  
+  getgraph3d(graph,Scalar,&gp,&nox,&noy,0,1,1,1);
   */
+  if (!gp) { no_graph_data("checkcontours"); return 0; }
   contour(gp,nox,noy,
 	  cut,&cont,&length,0,NULL,&boundary);
   l=length[0];
@@ -193,12 +210,16 @@ int checkcontours(grstr graph,double cut)
 void data_from_contour(double *cont, int anz,
 		       double *a, double *b, double *tet)
 { 
-  int i,ai,bi; 
+  int i,ai,bi;
   double d,center[2];
 
   /*
   getcenter(center);
   */
+  (void)i;(void)ai;(void)bi;(void)d;(void)center;(void)cont;(void)anz;
+  no_graph_data("data_from_contour (getcenter)");
+  *a=0;*b=0;*tet=0;
+  return;
   ai=0;
   *a=*b=sqrt(pow2(cont[0]-center[0])+pow2(cont[1]-center[1]));
   for (i=0;i<anz;i++)
@@ -213,11 +234,13 @@ void data_from_contour(double *cont, int anz,
 double pressure_difference(grstr graph)
 {
  double center[2],*gp=NULL,res;
- int ci[2],nox,noy;
+ int ci[2],nox=0,noy=0;
  /*
- getgraph3d(graph,Scalar,&gp,&nox,&noy,8,1,1,1);  
+ getgraph3d(graph,Scalar,&gp,&nox,&noy,8,1,1,1);
  getcenter(&(center[0]));
  */
+ if (!gp) { no_graph_data("pressure_difference"); return 0; }
+ center[0]=center[1]=0;
  ci[0]=center[0];ci[1]=center[1];
  res=gp[ci[0]*noy+ci[1]]
     -gp[3*noy+3];
@@ -228,11 +251,12 @@ double pressure_difference(grstr graph)
 
 double get_min(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double min,*gp=NULL;
  /*
- getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);  
+ getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_min"); return 0; }
  min=gp[0];
  for (i=1;i<nox*noy;i++)
    if (min>gp[i]) min=gp[i];
@@ -242,11 +266,12 @@ double get_min(grstr graph,int nograph)
 
 double get_max(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double max,*gp=NULL;
  /*
- getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);  
+ getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_max"); return 0; }
  max=gp[0];
  for (i=1;i<nox*noy;i++)
    if (max<gp[i]) max=gp[i];
@@ -267,12 +292,13 @@ void get_minmax(double *gp,int anz,double *min, double *max)
 
 double get_vecmax(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double max,*gp=NULL;
  register double t;
  /*
- getgraph3d(graph,Vector,&gp,&nox,&noy,nograph,1,1,1);  
+ getgraph3d(graph,Vector,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_vecmax"); return 0; }
  max=0;
  for (i=0;i<2*nox*noy;i+=2){
    t=pow2(gp[i])+pow2(gp[i+1]);
@@ -284,11 +310,12 @@ double get_vecmax(grstr graph,int nograph)
 
 double get_vecav(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double av,*gp=NULL;
  /*
- getgraph3d(graph,Vector,&gp,&nox,&noy,nograph,1,1,1);  
+ getgraph3d(graph,Vector,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_vecav"); return 0; }
  av=0;
  for (i=0;i<2*nox*noy;i+=2){
    av+=sqrt(pow2(gp[i])+pow2(gp[i+1]));
@@ -299,11 +326,12 @@ double get_vecav(grstr graph,int nograph)
 
 double get_av(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double sum,*gp=NULL;
  /*
- getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);  
+ getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_av2"); return 0; }
  sum=0;
  for (i=0;i<nox*noy;i++)
    sum+=gp[i];
@@ -313,11 +341,12 @@ double get_av(grstr graph,int nograph)
 
 double get_av2(grstr graph,int nograph)
 {
- int i,nox,noy;
+ int i,nox=0,noy=0;
  double sum,*gp=NULL;
  /*
  getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);
  */
+ if (!gp) { no_graph_data("get_av"); return 0; }
  sum=0;
  for (i=0;i<nox*noy;i++)
    sum+=pow2(gp[i]);
@@ -328,11 +357,12 @@ double get_av2(grstr graph,int nograph)
 double get_areafrac(grstr graph,int nograph,double cut)
 {
   long sum;
-  int i,nox,noy;
+  int i,nox=0,noy=0;
   double *gp=NULL;
   /*
-  getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);  
+  getgraph3d(graph,Scalar,&gp,&nox,&noy,nograph,1,1,1);
   */
+  if (!gp) { no_graph_data("get_areafrac"); return 0; }
   sum=0;
   for (i=0;i<nox*noy;i++)
     if (gp[i]>cut) sum++;
@@ -452,11 +482,12 @@ double Sd0(double data[],int nn[])
 
 int drop_data(grstr graph,double cut,double *a,double *b, double *tet)
 {
-  int l,*length,nox,noy,boundary=0;
+  int l,*length,nox=0,noy=0,boundary=0;
   double *cont,*gp=NULL;
   /*
-  getgraph3d(graph,Scalar,&gp,&nox,&noy,0,1,1,1);  
+  getgraph3d(graph,Scalar,&gp,&nox,&noy,0,1,1,1);
   */
+  if (!gp) { no_graph_data("drop_data"); *a=0;*b=0;*tet=0; return 0; }
   contour(gp,nox,noy,
 	  cut,&cont,&length,0,NULL,&boundary);
   l=length[0];
@@ -480,13 +511,18 @@ int drop_data(grstr graph,double cut,double *a,double *b, double *tet)
 void get_fftdata(grstr graph,int nogr,double *d0, double *kav, 
 		 double d1[2],double d2[3])
 { 
-  int x,y,nn[2],m,ct,tvar,nox,noy;
-  double *field,*gp=NULL;
+  int x,y,nn[2],m,ct,tvar,nox=0,noy=0;
+  double *field,*field_base,*gp=NULL;
   double average;
-  
+
   /*
   getgraph3d(graph,Scalar,&gp,&nox,&noy,nogr,1,1,1);
   */
+  if (!gp) {
+    no_graph_data("get_fftdata");
+    *d0=*kav=0; d1[0]=d1[1]=0; d2[0]=d2[1]=d2[2]=0;
+    return;
+  }
   nn[0]=nox;
   nn[1]=noy;
 
@@ -506,7 +542,8 @@ void get_fftdata(grstr graph,int nogr,double *d0, double *kav,
     return;
   }
 
-  field=malloc(nn[0]*nn[1]*2*sizeof(double));
+  field_base=(double *) malloc((nn[0]*nn[1]*2+1)*sizeof(double));
+  field=field_base+1; /* field_base[1..]: fourn's 1-based view */
   average=0;
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
@@ -517,7 +554,7 @@ void get_fftdata(grstr graph,int nogr,double *d0, double *kav,
       field[2*(x*nn[1]+y)]=gp[x*noy+y]-average;
       field[2*(x*nn[1]+y)+1]=0;
     }
-  fourn(field-1,nn-1,2,1);
+  { int nn1[3]; nn1[0]=0; nn1[1]=nn[0]; nn1[2]=nn[1]; fourn(field_base, nn1, 2, 1); }
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
       gp[x*noy+y]=
@@ -528,7 +565,7 @@ void get_fftdata(grstr graph,int nogr,double *d0, double *kav,
 			  ((y+nn[1]/2)%nn[1]))])
 	    +pow2(field[2*(((x+nn[0]/2)%nn[0])*nn[1]+
 			  ((y+nn[1]/2)%nn[1]))+1]);
-  free(field);
+  free(field_base);
   *d0= S0(gp,nn);
   *kav=S1(gp,nn)/ *d0;
   Sk(gp,nn,*kav,d1);
@@ -541,11 +578,17 @@ void get_Struct_data(grstr graph,int nogr,double *S_0, double *S_1,
 { 
   int x,y,nn[2],nnm,m,ct,tvar,nox,noy,i;
   int *N;
-  double *field,*S,*gp=NULL;
+  double *field,*field_base,*S,*gp=NULL;
   double average;
   /*
   getgraph3d(graph,Scalar,&gp,&nox,&noy,nogr,1,1,1);
   */
+  nox=noy=0;
+  if (!gp) {
+    no_graph_data("get_Struct_data");
+    *S_0=*S_1=*S_2=*S_3=0; *Slen=0; *size=0;
+    return;
+  }
   nn[0]=nox;
   nn[1]=noy;
   
@@ -568,7 +611,8 @@ void get_Struct_data(grstr graph,int nogr,double *S_0, double *S_1,
   if (nn[0]>nn[1]) nnm=nn[1]; else nnm=nn[0];
   *size=nnm;
 
-  field= (double *) malloc(nn[0]*nn[1]*2*sizeof(double));
+  field_base=(double *) malloc((nn[0]*nn[1]*2+1)*sizeof(double));
+  field=field_base+1; /* field_base[1..]: fourn's 1-based view */
   average=0;
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
@@ -579,7 +623,7 @@ void get_Struct_data(grstr graph,int nogr,double *S_0, double *S_1,
       field[2*(x*nn[1]+y)]=gp[x*noy+y]-average;
       field[2*(x*nn[1]+y)+1]=0;
     }
-  fourn(field-1,nn-1,2,1);
+  { int nn1[3]; nn1[0]=0; nn1[1]=nn[0]; nn1[2]=nn[1]; fourn(field_base, nn1, 2, 1); }
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
       gp[x*noy+y]=
@@ -590,7 +634,7 @@ void get_Struct_data(grstr graph,int nogr,double *S_0, double *S_1,
 		     ((y+nn[1]/2)%nn[1]))])
        +pow2(field[2*(((x+nn[0]/2)%nn[0])*nn[1]+
 		     ((y+nn[1]/2)%nn[1]))+1]);
-  free(field);
+  free(field_base);
   *Slen=nnm/2+1;
   S    = (double *) malloc(*Slen*sizeof(double));
   N    = (int    *) malloc(*Slen*sizeof(int ));
@@ -619,12 +663,14 @@ double* get_structfact(grstr graph,int nogr,int *Slen)
 { 
   int x,y,nn[2],nnm,m,ct,tvar,nox,noy,i;
   int *N;
-  double *field,*S,*gp=NULL;
+  double *field,*field_base,*S,*gp=NULL;
   double average;
-  
+
   /*
   getgraph3d(graph,Scalar,&gp,&nox,&noy,nogr,1,1,1);
   */
+  nox=noy=0;
+  if (!gp) { no_graph_data("get_structfact"); *Slen=0; return NULL; }
   nn[0]=nox;
   nn[1]=noy;
   
@@ -646,7 +692,8 @@ double* get_structfact(grstr graph,int nogr,int *Slen)
   }
   if (nn[0]>nn[1]) nnm=nn[1]; else nnm=nn[0];
   
-  field= (double *) malloc(nn[0]*nn[1]*2*sizeof(double));
+  field_base=(double *) malloc((nn[0]*nn[1]*2+1)*sizeof(double));
+  field=field_base+1; /* field_base[1..]: fourn's 1-based view */
   average=0;
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
@@ -657,7 +704,7 @@ double* get_structfact(grstr graph,int nogr,int *Slen)
       field[2*(x*nn[1]+y)]=gp[x*noy+y]-average;
       field[2*(x*nn[1]+y)+1]=0;
     }
-  fourn(field-1,nn-1,2,1);
+  { int nn1[3]; nn1[0]=0; nn1[1]=nn[0]; nn1[2]=nn[1]; fourn(field_base, nn1, 2, 1); }
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
       gp[x*noy+y]=
@@ -668,7 +715,7 @@ double* get_structfact(grstr graph,int nogr,int *Slen)
 		     ((y+nn[1]/2)%nn[1]))])
        +pow2(field[2*(((x+nn[0]/2)%nn[0])*nn[1]+
 		     ((y+nn[1]/2)%nn[1]))+1]);
-  free(field);
+  free(field_base);
   *Slen=nnm/2+1;
   S    = (double *) malloc(*Slen*sizeof(double));
   N    = (int    *) malloc(*Slen*sizeof(int ));
@@ -694,7 +741,7 @@ double* GetStructFactFromData(double *gp,int nox,int noy,int *Slen)
 {
   int x,y,nn[2],nnm,m,ct,tvar,i;
   int *N;
-  double *field,*S;
+  double *field,*field_base,*S;
   double average;
   
   nn[0]=nox;
@@ -718,7 +765,8 @@ double* GetStructFactFromData(double *gp,int nox,int noy,int *Slen)
   }
   if (nn[0]>nn[1]) nnm=nn[1]; else nnm=nn[0];
   
-  field= (double *) malloc(nn[0]*nn[1]*2*sizeof(double));
+  field_base=(double *) malloc((nn[0]*nn[1]*2+1)*sizeof(double));
+  field=field_base+1; /* field_base[1..]: fourn's 1-based view */
   average=0;
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
@@ -729,7 +777,7 @@ double* GetStructFactFromData(double *gp,int nox,int noy,int *Slen)
       field[2*(x*nn[1]+y)]=gp[x*noy+y]-average;
       field[2*(x*nn[1]+y)+1]=0;
     }
-  fourn(field-1,nn-1,2,1);
+  { int nn1[3]; nn1[0]=0; nn1[1]=nn[0]; nn1[2]=nn[1]; fourn(field_base, nn1, 2, 1); }
   for (x=0;x<nn[0];x++)
     for (y=0;y<nn[1]; y++)
       gp[x*noy+y]=
@@ -740,7 +788,7 @@ double* GetStructFactFromData(double *gp,int nox,int noy,int *Slen)
 		     ((y+nn[1]/2)%nn[1]))])
        +pow2(field[2*(((x+nn[0]/2)%nn[0])*nn[1]+
 		     ((y+nn[1]/2)%nn[1]))+1]);
-  free(field);
+  free(field_base);
   *Slen=nnm/2+1;
   S    = (double *) malloc(*Slen*sizeof(double));
   N    = (int    *) malloc(*Slen*sizeof(int ));
@@ -761,314 +809,3 @@ double* GetStructFactFromData(double *gp,int nox,int noy,int *Slen)
   return S;
 }
 
-#ifdef notdef
-void get_correldata(int nogr,double *d0,double d2[4])
-{ 
-  int i,x,y,nn[2],m,ct,tvar;
-  double *field,gp=NULL;
-  double average;
-  
-  nn[0]=get_xsize();
-  nn[1]=get_ysize();
-
-/* Checking that size=2^n */
-  tvar=nn[0];
-  for (m=1,ct=0;m<16;ct+=tvar&1,tvar>>=1,m++);
-  if (ct!=1) return;
-  tvar=nn[1];
-  for (m=1,ct=0;m<16;ct+=tvar&1,tvar>>=1,m++);
-  if (ct!=1) return;
-
-  for (i=1;i<graph.anz; i++) graph.getgraph[i]=0;
-  graph.getgraph[nogr]=1;
-  graph.gp=malloc(graph.anz*sizeof(double *));
-  graph.gp[nogr]=malloc(nn[0]*nn[1]*sizeof(double));
-  /*
-  getgraph3d(graph,1,1,1,1);
-  */
-  field=malloc(nn[0]*nn[1]*4*sizeof(double));
-  average=0;
-  for (x=0;x<nn[0];x++)
-    for (y=0;y<nn[1]; y++)
-      average+=graph.gp[nogr][x*graph.noy+y];
-  average/=nn[0]*nn[1];
-  for (x=0;x<nn[0];x++)
-    for (y=0;y<nn[1]; y++){
-      field[2*(x*nn[1]*2+y)]=field[2*(x*nn[1]*2+2*nn[1]-1-y)]=
-	graph.gp[nogr][x*graph.noy+y]-average;
-      field[2*(x*nn[1]*2+y)+1]=field[2*(x*nn[1]*2+2*nn[1]-1-y)+1]=0;
-    }
-  nn[1]*=2;
-  fourn(field-1,nn-1,2,1);
-  for (x=0;x<nn[0]*nn[1];x++) {
-    field[2*x]=sqrt(pow2(field[2*x])+pow2(field[2*x+1]));
-    field[2*x+1]=0;
-  }
-  fourn(field-1,nn-1,2,-1);
-  nn[1]/=2;
-
-  for (x=0;x<nn[0];x++)
-    for (y=0;y<nn[1]; y++)
-      graph.gp[nogr][x*graph.noy+y]=
-	field[2*(((x+nn[0]/2)%nn[0])*nn[1]*2+
-		 ((y*2+nn[1])%(nn[1]*2)))]+
-	field[2*(((x+nn[0]/2)%nn[0])*nn[1]*2+
-		 ((y*2+1+nn[1])%(nn[1]*2)))];
-  free(field);
-  
-  *d0= S0(graph.gp[0],nn);
-  Sd2(graph.gp[0],nn,d2);
-  d2[0]/=*d0;d2[1]/=*d0;d2[2]/=*d0;d2[3]/=*d0;
-  free(graph.getgraph);
-  free(graph.gp[nogr]);
-  free(graph.gp);
-}
-#endif
-
-/* Mathematically equivalent to the fourier data with the 
-   sin(2 Pi k/L) term but it does not 
-   require a power of two size of the lattice with periodic 
-   boundary conditions.
-*/
-
-void get_derivdata(grstr graph, int nogr,double d2[3])
-{ 
-  int i,nox,noy;
-  double *gp=NULL;
-  /*
-  getgraph3d(graph,Vector,&gp,&nox,&noy,nogr,1,1,1);
-  */
-  d2[0]=d2[1]=d2[2]=0;
-  for (i=0;i<2*nox*noy;i+=2){
-    d2[0]+=pow2(gp[i]);
-    d2[1]+=gp[i]*gp[i+1];
-    d2[2]+=pow2(gp[i+1]);
-  }
-  d2[0]/=nox*noy;
-  d2[1]/=nox*noy;
-  d2[2]/=nox*noy;
-  free(gp);
-}
-
-
-
-
-/*  This was an attempt to construct data from a correlation function...
-int addmat(double data[],int nn[],int xg,int y,double mat[4],int dy,int *no)
-{
-  int x,xmin,xmax;
-  
-  if (!(data[xg*nn[1]+y]>0)) return xg+1;
-  for  (x=xg; (data[x*nn[1]+y]>0)&&(x<nn[0]); x++){
-    *no+=1;
-    mat[0]+=pow2((x-nn[0]/2)            )*data[x*nn[1]+y];
-    mat[1]+=    (x-nn[0]/2)*(y-nn[1]/2)   *data[x*nn[1]+y];
-    mat[3]+=pow2(            (y-nn[1]/2))*data[x*nn[1]+y];
-  }
-  xmax=x;
-  if (data[xg*nn[1]+y]>0)
-    for  (x=xg-1;(data[x*nn[1]+y]>0)&&(x>=0); x--){
-      *no+=1;
-      mat[0]+=pow2((x-nn[0]/2)            )*data[x*nn[1]+y];
-      mat[1]+=    (x-nn[0]/2)*(y-nn[1]/2)   *data[x*nn[1]+y];
-      mat[3]+=pow2(            (y-nn[1]/2))*data[x*nn[1]+y];
-    }
-  xmin=x+1;
-
-  if ((y+dy>=0)&&(y+dy<nn[1]))
-    for  (x=xmin;(x=addmat(data,nn,x,y+dy,mat,dy,no))<xmax;);
-  return xmax;
-}
-
-void Sd2(double data[],int nn[],double mat[3])
-{
-  int x,y,xmin,xmax,no=0;
-
-  mat[0]=mat[1]=mat[2]=0;
-
-
-  y=nn[1]/2;
-  for  (x=nn[0]/2;(data[x*nn[1]+y]>0)&&(x<nn[0]); x++){
-    no++;
-    mat[0]+=pow2((x-nn[0]/2)            )*data[x*nn[1]+y];
-    mat[1]+=    (x-nn[0]/2)*(y-nn[1]/2)   *data[x*nn[1]+y];
-    mat[2]+=pow2(            (y-nn[1]/2))*data[x*nn[1]+y];
-  }
-  xmax=x;
-  for  (x=nn[0]/2-1;(data[x*nn[1]+y]>0)&&(x>=0); x--){
-    no++;
-    mat[0]+=pow2((x-nn[0]/2)            )*data[x*nn[1]+y];
-    mat[1]+=    (x-nn[0]/2)*(y-nn[1]/2)   *data[x*nn[1]+y];
-    mat[2]+=pow2(            (y-nn[1]/2))*data[x*nn[1]+y];
-  }
-  xmin=x+1;
-
-  for  (x=xmin;(x=addmat(data,nn,x,y+1,mat, 1,&no))<xmax;);
-  for  (x=xmin;(x=addmat(data,nn,x,y-1,mat,-1,&no))<xmax;);
-}
-
-int add(double data[],int nn[],int xg,int y,double *sum,int dy,int *no)
-{
-  int x,xmin,xmax;
-
-  if (!(data[xg*nn[1]+y]>0)) return xg+1;
-  for  (x=xg; (data[x*nn[1]+y]>0)&&(x<nn[0]); x++){
-    no+=1;
-    *sum+=data[x*nn[1]+y];
-  }
-  xmax=x;
-  if (data[xg*nn[1]+y]>0)
-    for  (x=xg-1;(data[x*nn[1]+y]>0)&&(x>=0); x--){
-      *no+=1;
-      *sum+=data[x*nn[1]+y];
-    }
-  xmin=x+1;
-
-  if ((y+dy>=0)&&(y+dy<nn[1]))
-    for  (x=xmin;(x=add(data,nn,x,y+dy,sum,dy,no))<xmax;);
-  return xmax;
-}
-
-double Sd0(double data[],int nn[])
-{
-  int x,y,xmin,xmax,no=0;
-
-  double sum=0;
-
-
-  y=nn[1]/2;
-  for  (x=nn[0]/2;(data[x*nn[1]+y]>0)&&(x<nn[0]); x++){
-    no++;
-    sum+=data[x*nn[1]+y];
-  }
-  xmax=x;
-  for  (x=nn[0]/2-1;(data[x*nn[1]+y]>0)&&(x>=0); x--){
-    no++;
-    sum+=data[x*nn[1]+y];
-  }
-  xmin=x+1;
-
-  for  (x=xmin;(x=add(data,nn,x,y+1,&sum, 1,&no))<xmax;);
-  for  (x=xmin;(x=add(data,nn,x,y-1,&sum,-1,&no))<xmax;);
-  return sum;
-}
-*/
-
-void contourdata(double *cont,int *length,int *N,int *no1,int *no2,double *len)
-{
-  int i,j;
-  double *contp;
-
-  *N=length[0];
-  *no1=0;*no2=0;*len=0;
-  if (length[0]>0)
-    {
-      contp=cont;
-      for (j=0;j<length[0];j++)
-	{
-	  for (i=1,contp+=2; i<length[j*2+2]; i++,contp+=2)
-	    *len+=sqrt(pow2(contp[0]-contp[-2])+
-		       pow2(contp[1]-contp[-1]));
-	  if (length[3+j*2]==4) (*no1)++; 
-	  else if (length[3+j*2]==-4) (*no2)++;
-	}
-    }
-}
-
-void dircontourdata(double *cont,int *length,int *N,int *no1,int *no2,
-		    double *len, double *len1, double *len2,double *tet)
-{
-  int i,j;
-  double *contp,dl,dtet,nx=0,ny=0,dx,dy,ln;
-
-  *N=length[0];
-  *no1=0;*no2=0;*len=0;*len1=0;*len2=0;*tet=0;
-
-  if (length[0]>0)
-    {
-      contp=cont;
-      for (j=0;j<length[0];j++)
-	{
-	  for (i=1,contp+=2; i<length[j*2+2]; i++,contp+=2){
-	    dx=contp[0]-contp[-2];
-	    dy=contp[1]-contp[-1];
-	    dl=sqrt(pow2(dx)+pow2(dy));
-	    *len+=dl;
-	    dtet=atan2(dy,dx);
-	    /*dtet=acos(dx/dl);*/
-	    nx+=dl*cos(2*dtet);
-	    ny+=dl*sin(2*dtet);
-	  }
-	  if (length[3+j*2]==4) (*no1)++; 
-	  else if (length[3+j*2]==-4) (*no2)++;
-	}
-      ln=sqrt(pow2(nx)+pow2(ny));
-      *tet=atan2(ny,nx)/2;
-      /* *tet=acos(nx/ln)/2;*/
-      *len1=*len-ln;
-      *len2=*len+ln;
-    }
-}
-
-static int localxsize,localysize;
-
-long perind(int x,int y){
-  x%=localxsize;
-  if (x<0) x+=localxsize;
-  y%=localysize;
-  if (y<0) y+=localysize; 
-  return x*localysize+y;
-}
-
-
-void GetContourData(double *data, int nox, int noy, double cut,
-		   int *N, int *no1,int *no2, 
-		   double *len, double *len1, double *len2, double *tet,
-		   double *lenA, double *lenB)
-{
-  int i,j;
-  double *contp,dl,dtet,nx=0,ny=0,dx,dy,ln;
-  int *length,boundary=0;
-  double *cont,*mylen,dummy;
-
-  localxsize=nox;
-  localysize=noy;
-
-  contour(data,nox,noy,
-	  cut,&cont,&length,1,&perind,&boundary);
-
-  *N=length[0];
-  *no1=0;*no2=0;*len=0;*len1=0;*len2=0;*lenA=0;*lenB=0;*tet=0;dummy=0;
-
-  if (length[0]>0)
-    {
-      contp=cont;
-      for (j=0;j<length[0];j++)
-	{
-	  if (length[3+j*2]==4) {(*no1)++;mylen=lenA;} 
-	  else if (length[3+j*2]==-4) {(*no2)++;mylen=lenB;}
-          else mylen=&dummy;
-	  for (i=1,contp+=2; i<length[j*2+2]; i++,contp+=2){
-	    dx=contp[0]-contp[-2];
-	    dy=contp[1]-contp[-1];
-	    dl=sqrt(pow2(dx)+pow2(dy));
-	    *len+=dl;
-            *mylen+=dl;
-	    dtet=atan2(dy,dx);
-	    /*dtet=acos(dx/dl);*/
-	    nx+=dl*cos(2*dtet);
-	    ny+=dl*sin(2*dtet);
-	  }
-	}
-      ln=sqrt(pow2(nx)+pow2(ny));
-      *tet=atan2(ny,nx)/2;
-      /* *tet=acos(nx/ln)/2;*/
-      *len1=*len-ln;
-      *len2=*len+ln;
-    }
-
-
-
-  free(cont);
-  free(length);
-}

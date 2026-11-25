@@ -134,8 +134,24 @@ void GW_SetMinWindowSize(GW_Window* win, int min_w, int min_h) {
 void GW_FocusWindow(GW_Window* win) {
     if (!win || !win->dpy) return;
     Display* dpy = (Display*)win->dpy;
-    XMapRaised(dpy, (Window)win->win);
-    XSetInputFocus(dpy, (Window)win->win, RevertToParent, CurrentTime);
+    Window w = (Window)win->win;
+    XMapRaised(dpy, w);
+    // Ask the window manager (EWMH _NET_ACTIVE_WINDOW, source 1 = application);
+    // it also restores a minimised window.
+    XEvent e;
+    memset(&e, 0, sizeof(e));
+    e.xclient.type = ClientMessage;
+    e.xclient.window = w;
+    e.xclient.message_type = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
+    e.xclient.format = 32;
+    e.xclient.data.l[0] = 1;
+    e.xclient.data.l[1] = CurrentTime;
+    XSendEvent(dpy, DefaultRootWindow(dpy), False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
+    // Without a window manager, set the focus directly; only legal once the
+    // window is viewable (otherwise BadMatch), so not right after mapping.
+    XWindowAttributes a;
+    if (XGetWindowAttributes(dpy, w, &a) && a.map_state == IsViewable)
+        XSetInputFocus(dpy, w, RevertToParent, CurrentTime);
     XFlush(dpy);
 }
 

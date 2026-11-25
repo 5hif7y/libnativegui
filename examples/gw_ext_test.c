@@ -329,6 +329,45 @@ int main(int argc, char** argv) {
 
 #endif
 
+    /* several windows: each event carries its own window */
+    {
+        while (GW_PollEvent(&ev)) {}
+        GW_Window* w2 = GW_CreateWindow("gw_ext_test 2", 120, 80);
+        CHECK(w2 != NULL && w2 != w, "second window");
+        if (w2) {
+            int bw2, bh2;
+            GW_GetBackbuffer(w2, &bw2, &bh2);
+            CHECK(bw2 == 120 && bh2 == 80, "second backbuffer %dx%d", bw2, bh2);
+            while (GW_PollEvent(&ev)) {}
+            GW_PostUserEvent(w2, 7, NULL);
+            GW_PostUserEvent(w, 8, NULL);
+            int got7 = 0, got8 = 0;
+            for (int i = 0; i < 4 && (!got7 || !got8); i++) {
+                if (!wait_for(&ev, GW_EVENT_USER, 1000)) break;
+                if (ev.user.code == 7) got7 = ev.window == w2;
+                if (ev.user.code == 8) got8 = ev.window == w;
+            }
+            CHECK(got7 && got8, "user events keep their window (%d %d)", got7, got8);
+            CHECK(GW_SetTimer(w2, 9, 30), "timer on the second window");
+            CHECK(wait_for(&ev, GW_EVENT_TIMER, 1000) && ev.timer.id == 9 && ev.window == w2, "timer event carries its window");
+            GW_KillTimer(w2, 9);
+#ifndef _WIN32
+            put_button(w2, ButtonPress, 1, 5, 6, 0, 9000);
+            CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN && ev.window == w2, "X event routed to the second window");
+            put_button(w, ButtonPress, 1, 5, 6, 0, 9600);
+            CHECK(GW_PollEvent(&ev) && ev.type == GW_EVENT_MOUSE_BUTTON_DOWN && ev.window == w, "and to the first one");
+            GW_SetTimer(w2, 10, 10);
+#endif
+            GW_DestroyWindow(w2);
+            uint64_t end = GW_GetTicks() + 100;
+            int stale = 0;
+            while (GW_GetTicks() < end) if (GW_WaitEventTimeout(&ev, 20) && ev.window == w2) stale = 1;
+            CHECK(!stale, "no events for a destroyed window");
+            GW_PostUserEvent(w, 11, NULL);
+            CHECK(wait_for(&ev, GW_EVENT_USER, 1000) && ev.user.code == 11 && ev.window == w, "first window still works after the second is gone");
+        }
+    }
+
     /* misc */
     GW_SetCursor(w, GW_CURSOR_HAND);
     float scale = GW_GetDpiScale(w);
